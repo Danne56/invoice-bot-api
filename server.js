@@ -14,21 +14,21 @@ async function startServer() {
     logger.info('Database connected successfully');
     connection.release();
 
-    // Start HTTP server
+    // Start HTTP server only after successful DB connection
     server = app.listen(PORT, () => {
       logger.info(`Server running on port ${PORT}`);
       logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
     });
-
-    // Handle server errors
-    server.on('error', error => {
-      logger.error('Server error:', error);
-      process.exit(1);
-    });
-  } catch (error) {
-    logger.error('Failed to start server:', error.message);
+  } catch (err) {
+    logger.error('Failed to connect to database:', err.message);
     process.exit(1);
   }
+
+  // Handle server errors
+  server.on('error', error => {
+    logger.error('Server error:', error);
+    process.exit(1);
+  });
 }
 
 // Graceful shutdown with timeout protection
@@ -53,8 +53,8 @@ async function gracefulShutdown(signal) {
 
     clearTimeout(shutdownTimeout);
     process.exit(0);
-  } catch (error) {
-    logger.error('Error during shutdown:', error);
+  } catch (err) {
+    logger.error('Error during shutdown:', err);
     clearTimeout(shutdownTimeout);
     process.exit(1);
   }
@@ -68,8 +68,8 @@ process.on('unhandledRejection', async (reason, promise) => {
   await gracefulShutdown('UNHANDLED_REJECTION').catch(() => process.exit(1));
 });
 
-process.on('uncaughtException', error => {
-  logger.error('Uncaught Exception:', error);
+process.on('uncaughtException', err => {
+  logger.error('Uncaught Exception:', err);
   process.exit(1);
 });
 
