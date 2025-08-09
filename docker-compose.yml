@@ -44,5 +44,6 @@ services:
     volumes:
       - mariadb-invoice-data:/var/lib/mysql
       - ./src/db/database-setup.sql:/docker-entrypoint-initdb.d/database-setup.sql
+      - ./docker/mariadb/conf.d:/etc/mysql/conf.d:ro
     ports:
       - 3306:3306
