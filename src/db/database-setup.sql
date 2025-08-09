@@ -1,9 +1,6 @@
 -- Database schema for WhatsApp Trip Expense Bot API
 -- Using nanoid(12) for primary keys
 
-CREATE DATABASE IF NOT EXISTS trip_expense_db CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
-USE trip_expense_db;
-
 -- Users table with custom ID
 CREATE TABLE IF NOT EXISTS users (
     id VARCHAR(12) PRIMARY KEY,  -- Custom ID from nanoid

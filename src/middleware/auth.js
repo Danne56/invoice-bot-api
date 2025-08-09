@@ -1,6 +1,11 @@
 const logger = require('../utils/logger');
 
 const authenticateApiKey = (req, res, next) => {
+  if (process.env.NODE_ENV === 'development') {
+    logger.debug('Development mode: API key authentication bypassed');
+    return next();
+  }
+
   const apiKey = req.headers['x-api-key'];
 
   if (!apiKey || apiKey !== process.env.API_KEY) {
