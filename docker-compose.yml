@@ -41,9 +41,10 @@ services:
       - MYSQL_USER=${DB_USER}
       - MYSQL_PASSWORD=${DB_PASSWORD}
       - MARIADB_AUTO_UPGRADE="1"
+      - TZ='Asia/Jakarta'
     volumes:
       - mariadb-invoice-data:/var/lib/mysql
       - ./src/db/database-setup.sql:/docker-entrypoint-initdb.d/database-setup.sql
-      - ./docker/mariadb/conf.d:/etc/mysql/conf.d:ro
+      - ./docker/mariadb/conf.d/my.cnf:/etc/my.cnf.d/my.cnf:ro
     ports:
       - 3306:3306
