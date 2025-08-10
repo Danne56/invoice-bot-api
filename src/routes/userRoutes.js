@@ -183,12 +183,16 @@ router.post(
         { tripId: trip.id, phone_number, finalTotal },
         'Trip stopped successfully'
       );
+
+      // Format amount with thousand separators for IDR
+      const formattedTotal = parseInt(finalTotal).toLocaleString('id-ID');
+
       res.status(200).json({
         success: true,
         trip_id: trip.id,
         event_name: trip.event_name,
-        total_amount: parseFloat(finalTotal),
-        message: `Trip '${trip.event_name}' completed with total expense: $${finalTotal}`,
+        total_amount: parseInt(finalTotal),
+        message: `Trip '${trip.event_name}' completed with total expense: Rp ${formattedTotal}`,
       });
     } catch (err) {
       await db.rollback();
@@ -233,7 +237,13 @@ router.get(
         return res.status(404).json({ error: 'User not found' });
       }
 
-      res.status(200).json({ data: users[0] });
+      // Convert total_amount to integer for IDR if it exists
+      const user = users[0];
+      if (user.total_amount !== null) {
+        user.total_amount = parseInt(user.total_amount);
+      }
+
+      res.status(200).json({ data: user });
     } catch (err) {
       logger.error({ err, phone_number }, 'Failed to fetch user');
       res.status(500).json({ error: 'Failed to fetch user' });
@@ -292,7 +302,7 @@ router.get(
               trip_id: status.trip_id,
               event_name: status.event_name,
               started_at: status.started_at,
-              total_amount: parseFloat(status.total_amount || 0),
+              total_amount: parseInt(status.total_amount || 0), // Convert to integer for IDR
               transaction_count: parseInt(status.transaction_count || 0),
             }
           : null,

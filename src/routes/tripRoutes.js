@@ -49,7 +49,12 @@ router.get(
 
       const trip = trips[0];
       trip.transactions = transactions;
-      trip.total_amount = parseFloat(trip.total_amount);
+      trip.total_amount = parseInt(trip.total_amount); // Convert to integer for IDR
+
+      // Convert transaction amounts to integers for IDR
+      trip.transactions.forEach(transaction => {
+        transaction.amount = parseInt(transaction.amount);
+      });
 
       res.status(200).json({ data: trip });
     } catch (err) {
@@ -114,9 +119,9 @@ router.get(
 
       const [trips] = await db.execute(query, params);
 
-      // Convert total_amount to float for each trip
+      // Convert total_amount to integer for each trip (IDR)
       trips.forEach(trip => {
-        trip.total_amount = parseFloat(trip.total_amount);
+        trip.total_amount = parseInt(trip.total_amount);
         trip.transaction_count = parseInt(trip.transaction_count);
       });
 
@@ -198,14 +203,14 @@ router.get(
           started_at: trip.started_at,
           ended_at: trip.ended_at,
           status: trip.status,
-          recorded_total: parseFloat(trip.total_amount),
+          recorded_total: parseInt(trip.total_amount), // Convert to integer for IDR
         },
         expense_summary: {
           total_transactions: parseInt(stats.total_transactions),
-          calculated_total: parseFloat(stats.calculated_total),
-          average_expense: parseFloat(stats.average_expense || 0),
-          min_expense: parseFloat(stats.min_expense || 0),
-          max_expense: parseFloat(stats.max_expense || 0),
+          calculated_total: parseInt(stats.calculated_total), // Convert to integer for IDR
+          average_expense: parseInt(stats.average_expense || 0), // Convert to integer for IDR
+          min_expense: parseInt(stats.min_expense || 0), // Convert to integer for IDR
+          max_expense: parseInt(stats.max_expense || 0), // Convert to integer for IDR
           processed_transactions: parseInt(stats.processed_count),
           pending_transactions: parseInt(stats.pending_count),
           failed_transactions: parseInt(stats.failed_count),

@@ -17,8 +17,8 @@ router.post(
     .isLength({ min: 10, max: 12 })
     .withMessage('Invalid trip ID'),
   body('amount')
-    .isFloat({ min: 0 })
-    .withMessage('Amount must be a positive number'),
+    .isInt({ min: 1 })
+    .withMessage('Amount must be a positive whole number (Indonesian Rupiah)'),
   body('description')
     .optional()
     .isLength({ max: 1000 })
@@ -75,7 +75,7 @@ router.post(
         [
           transactionId,
           trip_id,
-          amount,
+          parseInt(amount), // Convert to integer for IDR
           description || null,
           photo_url || null,
           ocr_text || null,
@@ -86,18 +86,21 @@ router.post(
         {
           transactionId,
           trip_id,
-          amount,
+          amount: parseInt(amount),
           description: description?.substring(0, 50) || 'No description',
         },
         'Transaction created successfully'
       );
 
+      // Format amount with thousand separators for IDR
+      const formattedAmount = parseInt(amount).toLocaleString('id-ID');
+
       res.status(201).json({
         success: true,
         transaction_id: transactionId,
         trip_id,
-        amount: parseFloat(amount),
-        message: `Expense of $${amount} recorded successfully`,
+        amount: parseInt(amount),
+        message: `Expense of Rp ${formattedAmount} recorded successfully`,
       });
     } catch (err) {
       logger.error({ err, reqBody: req.body }, 'Failed to create transaction');
@@ -143,7 +146,7 @@ router.get(
       }
 
       const transaction = transactions[0];
-      transaction.amount = parseFloat(transaction.amount);
+      transaction.amount = parseInt(transaction.amount); // Convert to integer for IDR
 
       res.status(200).json({ data: transaction });
     } catch (err) {
@@ -167,8 +170,8 @@ router.put(
     .withMessage('Invalid transaction ID'),
   body('amount')
     .optional()
-    .isFloat({ min: 0 })
-    .withMessage('Amount must be a positive number'),
+    .isInt({ min: 1 })
+    .withMessage('Amount must be a positive whole number (Indonesian Rupiah)'),
   body('description')
     .optional()
     .isLength({ max: 1000 })
@@ -225,7 +228,7 @@ router.put(
 
       if (amount !== undefined) {
         updates.push('amount = ?');
-        params.push(amount);
+        params.push(parseInt(amount)); // Convert to integer for IDR
       }
       if (description !== undefined) {
         updates.push('description = ?');
@@ -400,9 +403,9 @@ router.get(
 
       const [transactions] = await db.execute(query, params);
 
-      // Convert amounts to float
+      // Convert amounts to integer for IDR
       transactions.forEach(transaction => {
-        transaction.amount = parseFloat(transaction.amount);
+        transaction.amount = parseInt(transaction.amount);
       });
 
       res.status(200).json({

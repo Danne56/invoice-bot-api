@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS trips (
     event_name VARCHAR(255) NOT NULL,
     started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     ended_at DATETIME NULL,
-    total_amount DECIMAL(15,2) DEFAULT 0.00,
+    total_amount DECIMAL(15,0) DEFAULT 0,  -- Indonesian Rupiah (no decimal places)
     status ENUM('active', 'completed') DEFAULT 'active',
     FOREIGN KEY (phone_number) REFERENCES users(phone_number) ON DELETE CASCADE,
     INDEX idx_phone_active (phone_number, status),
@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS trips (
 CREATE TABLE IF NOT EXISTS transactions (
     id VARCHAR(12) PRIMARY KEY,  -- Custom ID from nanoid
     trip_id VARCHAR(12) NOT NULL,
-    amount DECIMAL(15,2) NOT NULL,
+    amount DECIMAL(15,0) NOT NULL,  -- Indonesian Rupiah (no decimal places)
     description TEXT,
     recorded_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     photo_url TEXT,
