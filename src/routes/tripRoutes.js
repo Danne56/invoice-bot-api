@@ -48,16 +48,43 @@ router.get(
       );
 
       const trip = trips[0];
-      trip.transactions = transactions;
-      trip.total_amount = parseInt(trip.total_amount); // Convert to integer for IDR
+      const tripCurrency = trip.currency || 'IDR';
+      // Convert trip total to major by trip currency
+      trip.total_amount_minor = parseInt(trip.total_amount || 0);
+      trip.total_amount =
+        tripCurrency === 'USD'
+          ? Number(((trip.total_amount || 0) / 100).toFixed(2))
+          : parseInt(trip.total_amount || 0);
+      trip.currency = tripCurrency;
 
-      // Convert transaction amounts to integers for IDR
-      trip.transactions.forEach(transaction => {
-        transaction.total_amount = parseInt(transaction.total_amount);
-        if (transaction.subtotal)
-          transaction.subtotal = parseInt(transaction.subtotal);
-        if (transaction.tax_amount)
-          transaction.tax_amount = parseInt(transaction.tax_amount);
+      // Map transactions with currency and dual amounts
+      trip.transactions = transactions.map(t => {
+        const currency = t.currency || tripCurrency;
+        const row = {
+          ...t,
+          currency,
+          total_amount_minor: t.total_amount ? parseInt(t.total_amount) : 0,
+          total_amount: t.total_amount
+            ? currency === 'USD'
+              ? Number((parseInt(t.total_amount) / 100).toFixed(2))
+              : parseInt(t.total_amount)
+            : 0,
+        };
+        if (t.subtotal !== null && t.subtotal !== undefined) {
+          row.subtotal_minor = parseInt(t.subtotal);
+          row.subtotal =
+            currency === 'USD'
+              ? Number((parseInt(t.subtotal) / 100).toFixed(2))
+              : parseInt(t.subtotal);
+        }
+        if (t.tax_amount !== null && t.tax_amount !== undefined) {
+          row.tax_amount_minor = parseInt(t.tax_amount);
+          row.tax_amount =
+            currency === 'USD'
+              ? Number((parseInt(t.tax_amount) / 100).toFixed(2))
+              : parseInt(t.tax_amount);
+        }
+        return row;
       });
 
       res.status(200).json({ data: trip });
@@ -123,9 +150,15 @@ router.get(
 
       const [trips] = await db.execute(query, params);
 
-      // Convert total_amount to integer for each trip (IDR)
+      // Convert totals for each trip using trip currency
       trips.forEach(trip => {
-        trip.total_amount = parseInt(trip.total_amount);
+        const currency = trip.currency || 'IDR';
+        trip.total_amount_minor = parseInt(trip.total_amount || 0);
+        trip.total_amount =
+          currency === 'USD'
+            ? Number(((trip.total_amount || 0) / 100).toFixed(2))
+            : parseInt(trip.total_amount || 0);
+        trip.currency = currency;
         trip.transaction_count = parseInt(trip.transaction_count);
       });
 
@@ -197,6 +230,28 @@ router.get(
       const trip = trips[0];
       const stats = summary[0];
 
+      // Enforce single-currency for summary
+      const [curRows] = await db.execute(
+        `SELECT DISTINCT currency FROM transactions WHERE trip_id = ?`,
+        [trip_id]
+      );
+      const distinctCurrencies = curRows.map(r => r.currency).filter(Boolean);
+      const tripCurrency = trip.currency || 'IDR';
+      if (
+        distinctCurrencies.length > 1 ||
+        (distinctCurrencies.length === 1 &&
+          distinctCurrencies[0] !== tripCurrency)
+      ) {
+        return res.status(400).json({
+          error:
+            'Mixed currencies detected in this trip. Single-currency per trip is enforced.',
+          details: {
+            currencies: distinctCurrencies,
+            trip_currency: tripCurrency,
+          },
+        });
+      }
+
       res.status(200).json({
         trip_info: {
           id: trip.id,
@@ -205,14 +260,35 @@ router.get(
           started_at: trip.started_at,
           ended_at: trip.ended_at,
           status: trip.status,
-          recorded_total: parseInt(trip.total_amount), // Convert to integer for IDR
+          currency: tripCurrency,
+          recorded_total_minor: parseInt(trip.total_amount),
+          recorded_total:
+            tripCurrency === 'USD'
+              ? Number((parseInt(trip.total_amount) / 100).toFixed(2))
+              : parseInt(trip.total_amount),
         },
         expense_summary: {
           total_transactions: parseInt(stats.total_transactions),
-          calculated_total: parseInt(stats.calculated_total), // Convert to integer for IDR
-          average_expense: parseInt(stats.average_expense || 0), // Convert to integer for IDR
-          min_expense: parseInt(stats.min_expense || 0), // Convert to integer for IDR
-          max_expense: parseInt(stats.max_expense || 0), // Convert to integer for IDR
+          calculated_total_minor: parseInt(stats.calculated_total),
+          calculated_total:
+            tripCurrency === 'USD'
+              ? Number((parseInt(stats.calculated_total) / 100).toFixed(2))
+              : parseInt(stats.calculated_total),
+          average_expense_minor: parseInt(stats.average_expense || 0),
+          average_expense:
+            tripCurrency === 'USD'
+              ? Number((parseInt(stats.average_expense || 0) / 100).toFixed(2))
+              : parseInt(stats.average_expense || 0),
+          min_expense_minor: parseInt(stats.min_expense || 0),
+          min_expense:
+            tripCurrency === 'USD'
+              ? Number((parseInt(stats.min_expense || 0) / 100).toFixed(2))
+              : parseInt(stats.min_expense || 0),
+          max_expense_minor: parseInt(stats.max_expense || 0),
+          max_expense:
+            tripCurrency === 'USD'
+              ? Number((parseInt(stats.max_expense || 0) / 100).toFixed(2))
+              : parseInt(stats.max_expense || 0),
           transactions_with_merchant: parseInt(
             stats.transactions_with_merchant
           ),

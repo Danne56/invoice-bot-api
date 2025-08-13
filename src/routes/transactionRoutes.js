@@ -6,6 +6,60 @@ const logger = require('../utils/logger');
 
 const router = express.Router();
 
+// Helpers for currency handling
+function toMinor(currency, value) {
+  if (currency === 'USD') {
+    // Support numbers or numeric strings, round to cents
+    const num = typeof value === 'string' ? Number(value) : value;
+    return Math.round(num * 100);
+  }
+  // IDR: already integer rupiah
+  return parseInt(value);
+}
+
+function toMajor(currency, minor) {
+  const n = typeof minor === 'string' ? parseInt(minor) : minor;
+  if (currency === 'USD') {
+    return Number((n / 100).toFixed(2));
+  }
+  return n; // IDR
+}
+
+function isValidAmountByCurrency(currency, raw, { allowZero = false } = {}) {
+  if (currency === 'USD') {
+    // allow up to 2 decimals
+    const str = String(raw);
+    if (!/^\d+(?:\.\d{1,2})?$/.test(str)) return false;
+    const num = Number(str);
+    return allowZero ? num >= 0 : num > 0;
+  }
+  // IDR must be integer
+  if (!/^\d+$/.test(String(raw))) return false;
+  const num = parseInt(raw);
+  return allowZero ? num >= 0 : num > 0;
+}
+
+async function getTripAndEnforceCurrency(db, tripId, requestedCurrency) {
+  const [trips] = await db.execute(
+    `SELECT id, status, event_name, currency FROM trips WHERE id = ?`,
+    [tripId]
+  );
+  if (trips.length === 0) return { notFound: true };
+  const trip = trips[0];
+  if (trip.status !== 'active') {
+    return { trip, completed: true };
+  }
+  // If trip has a currency set and request specifies a different one, reject
+  if (
+    trip.currency &&
+    requestedCurrency &&
+    trip.currency !== requestedCurrency
+  ) {
+    return { trip, currencyMismatch: true };
+  }
+  return { trip };
+}
+
 /**
  * POST /api/transactions
  * Create a new invoice/receipt transaction
@@ -16,11 +70,21 @@ router.post(
     .isString()
     .isLength({ min: 10, max: 12 })
     .withMessage('Invalid trip ID'),
-  body('total_amount')
-    .isInt({ min: 1 })
-    .withMessage(
-      'Total amount must be a positive whole number (Indonesian Rupiah)'
-    ),
+  body('currency')
+    .optional()
+    .isIn(['IDR', 'USD'])
+    .withMessage('Currency must be IDR or USD'),
+  body('total_amount').custom((value, { req }) => {
+    const currency = req.body.currency || 'IDR';
+    if (!isValidAmountByCurrency(currency, value)) {
+      throw new Error(
+        currency === 'USD'
+          ? 'Total amount (USD) must be a positive number with up to 2 decimals'
+          : 'Total amount (IDR) must be a positive integer'
+      );
+    }
+    return true;
+  }),
   body('merchant')
     .optional()
     .isLength({ max: 100 })
@@ -32,16 +96,30 @@ router.post(
     .withMessage('Date must be in ISO 8601 format (YYYY-MM-DD)'),
   body('subtotal')
     .optional()
-    .isInt({ min: 0 })
-    .withMessage(
-      'Subtotal must be a non-negative whole number (Indonesian Rupiah)'
-    ),
+    .custom((value, { req }) => {
+      const currency = req.body.currency || 'IDR';
+      if (!isValidAmountByCurrency(currency, value, { allowZero: true })) {
+        throw new Error(
+          currency === 'USD'
+            ? 'Subtotal (USD) must be a non-negative number with up to 2 decimals'
+            : 'Subtotal (IDR) must be a non-negative integer'
+        );
+      }
+      return true;
+    }),
   body('tax_amount')
     .optional()
-    .isInt({ min: 0 })
-    .withMessage(
-      'Tax amount must be a non-negative whole number (Indonesian Rupiah)'
-    ),
+    .custom((value, { req }) => {
+      const currency = req.body.currency || 'IDR';
+      if (!isValidAmountByCurrency(currency, value, { allowZero: true })) {
+        throw new Error(
+          currency === 'USD'
+            ? 'Tax amount (USD) must be a non-negative number with up to 2 decimals'
+            : 'Tax amount (IDR) must be a non-negative integer'
+        );
+      }
+      return true;
+    }),
   body('item_count')
     .optional()
     .isInt({ min: 1 })
@@ -70,47 +148,56 @@ router.post(
       tax_amount,
       item_count,
       item_summary,
+      currency = 'IDR',
     } = req.body;
     const transactionId = generateId(12);
     const db = await pool.getConnection();
 
     try {
       // Verify trip exists and is active
-      const [trips] = await db.execute(
-        `
-        SELECT id, status, event_name FROM trips WHERE id = ?
-      `,
-        [trip_id]
-      );
-
-      if (trips.length === 0) {
+      const result = await getTripAndEnforceCurrency(db, trip_id, currency);
+      if (result.notFound) {
         return res.status(404).json({ error: 'Trip not found' });
       }
-
-      if (trips[0].status !== 'active') {
+      if (result.completed) {
         return res
           .status(400)
           .json({ error: 'Cannot add transactions to a completed trip' });
       }
+      if (result.currencyMismatch) {
+        return res.status(400).json({
+          error: `Trip currency (${result.trip.currency}) does not match transaction currency (${currency})`,
+        });
+      }
+      const trip = result.trip;
 
       // Create transaction with new invoice schema
       await db.execute(
         `
-        INSERT INTO transactions (id, trip_id, merchant, date, total_amount, subtotal, tax_amount, item_count, item_summary, recorded_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        INSERT INTO transactions (id, trip_id, currency, merchant, date, total_amount, subtotal, tax_amount, item_count, item_summary, recorded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
       `,
         [
           transactionId,
           trip_id,
+          currency,
           merchant || null,
           date || null,
-          parseInt(total_amount),
-          subtotal ? parseInt(subtotal) : null,
-          tax_amount ? parseInt(tax_amount) : null,
+          toMinor(currency, total_amount),
+          subtotal !== undefined ? toMinor(currency, subtotal) : null,
+          tax_amount !== undefined ? toMinor(currency, tax_amount) : null,
           item_count ? parseInt(item_count) : null,
           item_summary || null,
         ]
       );
+
+      // If trip has no currency set (legacy), set it now to enforce single-currency per trip
+      if (!trip.currency) {
+        await db.execute(`UPDATE trips SET currency = ? WHERE id = ?`, [
+          currency,
+          trip_id,
+        ]);
+      }
 
       logger.info(
         {
@@ -124,15 +211,24 @@ router.post(
       );
 
       // Format amount with thousand separators for IDR
-      const formattedAmount = parseInt(total_amount).toLocaleString('id-ID');
+      const major = toMajor(currency, toMinor(currency, total_amount));
+      const message =
+        currency === 'USD'
+          ? `Invoice of $ ${major.toLocaleString('en-US', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })} recorded successfully`
+          : `Invoice of Rp ${major.toLocaleString('id-ID')} recorded successfully`;
 
       res.status(201).json({
         success: true,
         transaction_id: transactionId,
         trip_id,
-        total_amount: parseInt(total_amount),
+        currency,
+        total_amount_minor: toMinor(currency, total_amount),
+        total_amount: major,
         merchant: merchant || null,
-        message: `Invoice of Rp ${formattedAmount} recorded successfully`,
+        message,
       });
     } catch (err) {
       logger.error({ err, reqBody: req.body }, 'Failed to create transaction');
@@ -177,15 +273,24 @@ router.get(
         return res.status(404).json({ error: 'Transaction not found' });
       }
 
-      const transaction = transactions[0];
-      // Convert amounts to integers for IDR
-      transaction.total_amount = parseInt(transaction.total_amount);
-      if (transaction.subtotal)
-        transaction.subtotal = parseInt(transaction.subtotal);
-      if (transaction.tax_amount)
-        transaction.tax_amount = parseInt(transaction.tax_amount);
+      const t = transactions[0];
+      const currency = t.currency || 'IDR';
+      const payload = {
+        ...t,
+        currency,
+        total_amount_minor: t.total_amount ? parseInt(t.total_amount) : 0,
+        total_amount: t.total_amount ? toMajor(currency, t.total_amount) : 0,
+      };
+      if (t.subtotal !== null && t.subtotal !== undefined) {
+        payload.subtotal_minor = parseInt(t.subtotal);
+        payload.subtotal = toMajor(currency, t.subtotal);
+      }
+      if (t.tax_amount !== null && t.tax_amount !== undefined) {
+        payload.tax_amount_minor = parseInt(t.tax_amount);
+        payload.tax_amount = toMajor(currency, t.tax_amount);
+      }
 
-      res.status(200).json({ data: transaction });
+      res.status(200).json({ data: payload });
     } catch (err) {
       logger.error({ err, transaction_id }, 'Failed to fetch transaction');
       res.status(500).json({ error: 'Failed to fetch transaction' });
@@ -205,12 +310,23 @@ router.put(
     .isString()
     .isLength({ min: 10, max: 12 })
     .withMessage('Invalid transaction ID'),
+  body('currency')
+    .optional()
+    .isIn(['IDR', 'USD'])
+    .withMessage('Currency must be IDR or USD'),
   body('total_amount')
     .optional()
-    .isInt({ min: 1 })
-    .withMessage(
-      'Total amount must be a positive whole number (Indonesian Rupiah)'
-    ),
+    .custom((value, { req }) => {
+      const currency = req.body.currency || 'IDR';
+      if (!isValidAmountByCurrency(currency, value)) {
+        throw new Error(
+          currency === 'USD'
+            ? 'Total amount (USD) must be a positive number with up to 2 decimals'
+            : 'Total amount (IDR) must be a positive integer'
+        );
+      }
+      return true;
+    }),
   body('merchant')
     .optional()
     .isLength({ max: 100 })
@@ -222,16 +338,30 @@ router.put(
     .withMessage('Date must be in ISO 8601 format (YYYY-MM-DD)'),
   body('subtotal')
     .optional()
-    .isInt({ min: 0 })
-    .withMessage(
-      'Subtotal must be a non-negative whole number (Indonesian Rupiah)'
-    ),
+    .custom((value, { req }) => {
+      const currency = req.body.currency || 'IDR';
+      if (!isValidAmountByCurrency(currency, value, { allowZero: true })) {
+        throw new Error(
+          currency === 'USD'
+            ? 'Subtotal (USD) must be a non-negative number with up to 2 decimals'
+            : 'Subtotal (IDR) must be a non-negative integer'
+        );
+      }
+      return true;
+    }),
   body('tax_amount')
     .optional()
-    .isInt({ min: 0 })
-    .withMessage(
-      'Tax amount must be a non-negative whole number (Indonesian Rupiah)'
-    ),
+    .custom((value, { req }) => {
+      const currency = req.body.currency || 'IDR';
+      if (!isValidAmountByCurrency(currency, value, { allowZero: true })) {
+        throw new Error(
+          currency === 'USD'
+            ? 'Tax amount (USD) must be a non-negative number with up to 2 decimals'
+            : 'Tax amount (IDR) must be a non-negative integer'
+        );
+      }
+      return true;
+    }),
   body('item_count')
     .optional()
     .isInt({ min: 1 })
@@ -256,6 +386,7 @@ router.put(
       tax_amount,
       item_count,
       item_summary,
+      currency,
     } = req.body;
     const db = await pool.getConnection();
 
@@ -263,7 +394,7 @@ router.put(
       // Check if transaction exists and get trip status
       const [existing] = await db.execute(
         `
-        SELECT t.*, tr.status as trip_status
+        SELECT t.*, tr.status as trip_status, tr.currency as trip_currency
         FROM transactions t
         JOIN trips tr ON t.trip_id = tr.id
         WHERE t.id = ?
@@ -281,13 +412,21 @@ router.put(
           .json({ error: 'Cannot modify transactions for a completed trip' });
       }
 
+      const txCurrency =
+        existing[0].currency || existing[0].trip_currency || 'IDR';
+      if (currency && currency !== txCurrency) {
+        return res.status(400).json({
+          error: `Cannot change transaction currency from ${txCurrency} to ${currency}`,
+        });
+      }
+
       // Build update query dynamically
       const updates = [];
       const params = [];
 
       if (total_amount !== undefined) {
         updates.push('total_amount = ?');
-        params.push(parseInt(total_amount));
+        params.push(toMinor(txCurrency, total_amount));
       }
       if (merchant !== undefined) {
         updates.push('merchant = ?');
@@ -299,11 +438,13 @@ router.put(
       }
       if (subtotal !== undefined) {
         updates.push('subtotal = ?');
-        params.push(subtotal ? parseInt(subtotal) : null);
+        params.push(subtotal !== null ? toMinor(txCurrency, subtotal) : null);
       }
       if (tax_amount !== undefined) {
         updates.push('tax_amount = ?');
-        params.push(tax_amount ? parseInt(tax_amount) : null);
+        params.push(
+          tax_amount !== null ? toMinor(txCurrency, tax_amount) : null
+        );
       }
       if (item_count !== undefined) {
         updates.push('item_count = ?');
@@ -496,17 +637,28 @@ router.get(
 
       const [transactions] = await db.execute(query, params);
 
-      // Convert amounts to integers for IDR
-      transactions.forEach(transaction => {
-        transaction.total_amount = parseInt(transaction.total_amount);
-        if (transaction.subtotal)
-          transaction.subtotal = parseInt(transaction.subtotal);
-        if (transaction.tax_amount)
-          transaction.tax_amount = parseInt(transaction.tax_amount);
+      // Map with currency and dual amounts
+      const data = transactions.map(t => {
+        const currency = t.currency || 'IDR';
+        const row = {
+          ...t,
+          currency,
+          total_amount_minor: t.total_amount ? parseInt(t.total_amount) : 0,
+          total_amount: t.total_amount ? toMajor(currency, t.total_amount) : 0,
+        };
+        if (t.subtotal !== null && t.subtotal !== undefined) {
+          row.subtotal_minor = parseInt(t.subtotal);
+          row.subtotal = toMajor(currency, t.subtotal);
+        }
+        if (t.tax_amount !== null && t.tax_amount !== undefined) {
+          row.tax_amount_minor = parseInt(t.tax_amount);
+          row.tax_amount = toMajor(currency, t.tax_amount);
+        }
+        return row;
       });
 
       res.status(200).json({
-        data: transactions,
+        data,
         pagination: {
           limit: parseInt(limit),
           offset: parseInt(offset),
