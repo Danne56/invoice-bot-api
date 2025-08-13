@@ -22,7 +22,9 @@ app.use(cors()); // Allow CORS for API access
 app.use(express.json({ limit: '10mb' })); // Allow larger payloads for OCR text and images
 
 // Rate Limiting
-app.use(rateLimiter);
+if (process.env.NODE_ENV !== 'development') {
+  app.use(rateLimiter);
+}
 
 // Health check endpoint (no auth required)
 app.get('/health', (req, res) => {
