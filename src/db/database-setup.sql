@@ -31,16 +31,18 @@ CREATE TABLE IF NOT EXISTS trips (
 CREATE TABLE IF NOT EXISTS transactions (
     id VARCHAR(12) PRIMARY KEY,  -- Custom ID from nanoid
     trip_id VARCHAR(12) NOT NULL,
-    amount DECIMAL(15,0) NOT NULL,  -- Indonesian Rupiah (no decimal places)
-    description TEXT,
-    recorded_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    photo_url TEXT,
-    ocr_text TEXT,
-    status ENUM('pending', 'processed', 'failed') DEFAULT 'pending',
+    merchant VARCHAR(100),
+    date DATE,
+    total_amount DECIMAL(15, 0),
+    subtotal DECIMAL(15, 0),
+    tax_amount DECIMAL(15, 0),
+    item_count INT,
+    item_summary TEXT,
+    recorded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE,
-    INDEX idx_trip_id (trip_id),
-    INDEX idx_recorded_at (recorded_at),
-    INDEX idx_status (status)
+    INDEX idx_date (date),
+    INDEX idx_merchant (merchant),
+    INDEX idx_total_amount (total_amount)
 );
 
 -- Add foreign key constraint for current_trip_id in users table

@@ -8,7 +8,7 @@ const router = express.Router();
 
 /**
  * POST /api/transactions
- * Create a new expense transaction
+ * Create a new invoice/receipt transaction
  */
 router.post(
   '/',
@@ -16,23 +16,41 @@ router.post(
     .isString()
     .isLength({ min: 10, max: 12 })
     .withMessage('Invalid trip ID'),
-  body('amount')
+  body('total_amount')
     .isInt({ min: 1 })
-    .withMessage('Amount must be a positive whole number (Indonesian Rupiah)'),
-  body('description')
+    .withMessage(
+      'Total amount must be a positive whole number (Indonesian Rupiah)'
+    ),
+  body('merchant')
     .optional()
-    .isLength({ max: 1000 })
+    .isLength({ max: 100 })
     .trim()
-    .withMessage('Description must be less than 1000 characters'),
-  body('photo_url')
+    .withMessage('Merchant name must be less than 100 characters'),
+  body('date')
     .optional()
-    .isURL()
-    .withMessage('Photo URL must be a valid URL'),
-  body('ocr_text')
+    .isISO8601()
+    .withMessage('Date must be in ISO 8601 format (YYYY-MM-DD)'),
+  body('subtotal')
+    .optional()
+    .isInt({ min: 0 })
+    .withMessage(
+      'Subtotal must be a non-negative whole number (Indonesian Rupiah)'
+    ),
+  body('tax_amount')
+    .optional()
+    .isInt({ min: 0 })
+    .withMessage(
+      'Tax amount must be a non-negative whole number (Indonesian Rupiah)'
+    ),
+  body('item_count')
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage('Item count must be a positive integer'),
+  body('item_summary')
     .optional()
     .isLength({ max: 5000 })
     .trim()
-    .withMessage('OCR text must be less than 5000 characters'),
+    .withMessage('Item summary must be less than 5000 characters'),
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -43,7 +61,16 @@ router.post(
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { trip_id, amount, description, photo_url, ocr_text } = req.body;
+    const {
+      trip_id,
+      total_amount,
+      merchant,
+      date,
+      subtotal,
+      tax_amount,
+      item_count,
+      item_summary,
+    } = req.body;
     const transactionId = generateId(12);
     const db = await pool.getConnection();
 
@@ -63,22 +90,25 @@ router.post(
       if (trips[0].status !== 'active') {
         return res
           .status(400)
-          .json({ error: 'Cannot add expenses to a completed trip' });
+          .json({ error: 'Cannot add transactions to a completed trip' });
       }
 
-      // Create transaction
+      // Create transaction with new invoice schema
       await db.execute(
         `
-        INSERT INTO transactions (id, trip_id, amount, description, photo_url, ocr_text, recorded_at, status)
-        VALUES (?, ?, ?, ?, ?, ?, NOW(), 'processed')
+        INSERT INTO transactions (id, trip_id, merchant, date, total_amount, subtotal, tax_amount, item_count, item_summary, recorded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
       `,
         [
           transactionId,
           trip_id,
-          parseInt(amount), // Convert to integer for IDR
-          description || null,
-          photo_url || null,
-          ocr_text || null,
+          merchant || null,
+          date || null,
+          parseInt(total_amount),
+          subtotal ? parseInt(subtotal) : null,
+          tax_amount ? parseInt(tax_amount) : null,
+          item_count ? parseInt(item_count) : null,
+          item_summary || null,
         ]
       );
 
@@ -86,25 +116,27 @@ router.post(
         {
           transactionId,
           trip_id,
-          amount: parseInt(amount),
-          description: description?.substring(0, 50) || 'No description',
+          total_amount: parseInt(total_amount),
+          merchant: merchant || 'No merchant',
+          item_count: item_count || 0,
         },
-        'Transaction created successfully'
+        'Invoice transaction created successfully'
       );
 
       // Format amount with thousand separators for IDR
-      const formattedAmount = parseInt(amount).toLocaleString('id-ID');
+      const formattedAmount = parseInt(total_amount).toLocaleString('id-ID');
 
       res.status(201).json({
         success: true,
         transaction_id: transactionId,
         trip_id,
-        amount: parseInt(amount),
-        message: `Expense of Rp ${formattedAmount} recorded successfully`,
+        total_amount: parseInt(total_amount),
+        merchant: merchant || null,
+        message: `Invoice of Rp ${formattedAmount} recorded successfully`,
       });
     } catch (err) {
       logger.error({ err, reqBody: req.body }, 'Failed to create transaction');
-      res.status(500).json({ error: 'Failed to record expense' });
+      res.status(500).json({ error: 'Failed to record transaction' });
     } finally {
       db.release();
     }
@@ -146,7 +178,12 @@ router.get(
       }
 
       const transaction = transactions[0];
-      transaction.amount = parseInt(transaction.amount); // Convert to integer for IDR
+      // Convert amounts to integers for IDR
+      transaction.total_amount = parseInt(transaction.total_amount);
+      if (transaction.subtotal)
+        transaction.subtotal = parseInt(transaction.subtotal);
+      if (transaction.tax_amount)
+        transaction.tax_amount = parseInt(transaction.tax_amount);
 
       res.status(200).json({ data: transaction });
     } catch (err) {
@@ -168,28 +205,42 @@ router.put(
     .isString()
     .isLength({ min: 10, max: 12 })
     .withMessage('Invalid transaction ID'),
-  body('amount')
+  body('total_amount')
     .optional()
     .isInt({ min: 1 })
-    .withMessage('Amount must be a positive whole number (Indonesian Rupiah)'),
-  body('description')
+    .withMessage(
+      'Total amount must be a positive whole number (Indonesian Rupiah)'
+    ),
+  body('merchant')
     .optional()
-    .isLength({ max: 1000 })
+    .isLength({ max: 100 })
     .trim()
-    .withMessage('Description must be less than 1000 characters'),
-  body('photo_url')
+    .withMessage('Merchant name must be less than 100 characters'),
+  body('date')
     .optional()
-    .isURL()
-    .withMessage('Photo URL must be a valid URL'),
-  body('ocr_text')
+    .isISO8601()
+    .withMessage('Date must be in ISO 8601 format (YYYY-MM-DD)'),
+  body('subtotal')
+    .optional()
+    .isInt({ min: 0 })
+    .withMessage(
+      'Subtotal must be a non-negative whole number (Indonesian Rupiah)'
+    ),
+  body('tax_amount')
+    .optional()
+    .isInt({ min: 0 })
+    .withMessage(
+      'Tax amount must be a non-negative whole number (Indonesian Rupiah)'
+    ),
+  body('item_count')
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage('Item count must be a positive integer'),
+  body('item_summary')
     .optional()
     .isLength({ max: 5000 })
     .trim()
-    .withMessage('OCR text must be less than 5000 characters'),
-  body('status')
-    .optional()
-    .isIn(['pending', 'processed', 'failed'])
-    .withMessage('Status must be pending, processed, or failed'),
+    .withMessage('Item summary must be less than 5000 characters'),
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -197,7 +248,15 @@ router.put(
     }
 
     const { transaction_id } = req.params;
-    const { amount, description, photo_url, ocr_text, status } = req.body;
+    const {
+      total_amount,
+      merchant,
+      date,
+      subtotal,
+      tax_amount,
+      item_count,
+      item_summary,
+    } = req.body;
     const db = await pool.getConnection();
 
     try {
@@ -219,32 +278,40 @@ router.put(
       if (existing[0].trip_status === 'completed') {
         return res
           .status(400)
-          .json({ error: 'Cannot modify expenses for a completed trip' });
+          .json({ error: 'Cannot modify transactions for a completed trip' });
       }
 
       // Build update query dynamically
       const updates = [];
       const params = [];
 
-      if (amount !== undefined) {
-        updates.push('amount = ?');
-        params.push(parseInt(amount)); // Convert to integer for IDR
+      if (total_amount !== undefined) {
+        updates.push('total_amount = ?');
+        params.push(parseInt(total_amount));
       }
-      if (description !== undefined) {
-        updates.push('description = ?');
-        params.push(description);
+      if (merchant !== undefined) {
+        updates.push('merchant = ?');
+        params.push(merchant);
       }
-      if (photo_url !== undefined) {
-        updates.push('photo_url = ?');
-        params.push(photo_url);
+      if (date !== undefined) {
+        updates.push('date = ?');
+        params.push(date);
       }
-      if (ocr_text !== undefined) {
-        updates.push('ocr_text = ?');
-        params.push(ocr_text);
+      if (subtotal !== undefined) {
+        updates.push('subtotal = ?');
+        params.push(subtotal ? parseInt(subtotal) : null);
       }
-      if (status !== undefined) {
-        updates.push('status = ?');
-        params.push(status);
+      if (tax_amount !== undefined) {
+        updates.push('tax_amount = ?');
+        params.push(tax_amount ? parseInt(tax_amount) : null);
+      }
+      if (item_count !== undefined) {
+        updates.push('item_count = ?');
+        params.push(item_count ? parseInt(item_count) : null);
+      }
+      if (item_summary !== undefined) {
+        updates.push('item_summary = ?');
+        params.push(item_summary);
       }
 
       if (updates.length === 0) {
@@ -321,7 +388,7 @@ router.delete(
       if (existing[0].trip_status === 'completed') {
         return res
           .status(400)
-          .json({ error: 'Cannot delete expenses from a completed trip' });
+          .json({ error: 'Cannot delete transactions from a completed trip' });
       }
 
       // Delete transaction
@@ -355,10 +422,19 @@ router.get(
     .isString()
     .isLength({ min: 10, max: 12 })
     .withMessage('Invalid trip ID'),
-  query('status')
+  query('merchant')
     .optional()
-    .isIn(['pending', 'processed', 'failed'])
-    .withMessage('Invalid status'),
+    .isLength({ max: 100 })
+    .trim()
+    .withMessage('Merchant filter must be less than 100 characters'),
+  query('date_from')
+    .optional()
+    .isISO8601()
+    .withMessage('Date from must be in ISO 8601 format (YYYY-MM-DD)'),
+  query('date_to')
+    .optional()
+    .isISO8601()
+    .withMessage('Date to must be in ISO 8601 format (YYYY-MM-DD)'),
   query('limit')
     .optional()
     .isInt({ min: 1, max: 100 })
@@ -373,7 +449,14 @@ router.get(
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { trip_id, status, limit = 20, offset = 0 } = req.query;
+    const {
+      trip_id,
+      merchant,
+      date_from,
+      date_to,
+      limit = 20,
+      offset = 0,
+    } = req.query;
     const db = await pool.getConnection();
 
     try {
@@ -390,9 +473,19 @@ router.get(
         params.push(trip_id);
       }
 
-      if (status) {
-        query += ' AND t.status = ?';
-        params.push(status);
+      if (merchant) {
+        query += ' AND t.merchant LIKE ?';
+        params.push(`%${merchant}%`);
+      }
+
+      if (date_from) {
+        query += ' AND t.date >= ?';
+        params.push(date_from);
+      }
+
+      if (date_to) {
+        query += ' AND t.date <= ?';
+        params.push(date_to);
       }
 
       query += `
@@ -403,9 +496,13 @@ router.get(
 
       const [transactions] = await db.execute(query, params);
 
-      // Convert amounts to integer for IDR
+      // Convert amounts to integers for IDR
       transactions.forEach(transaction => {
-        transaction.amount = parseInt(transaction.amount);
+        transaction.total_amount = parseInt(transaction.total_amount);
+        if (transaction.subtotal)
+          transaction.subtotal = parseInt(transaction.subtotal);
+        if (transaction.tax_amount)
+          transaction.tax_amount = parseInt(transaction.tax_amount);
       });
 
       res.status(200).json({

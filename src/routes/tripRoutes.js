@@ -53,7 +53,11 @@ router.get(
 
       // Convert transaction amounts to integers for IDR
       trip.transactions.forEach(transaction => {
-        transaction.amount = parseInt(transaction.amount);
+        transaction.total_amount = parseInt(transaction.total_amount);
+        if (transaction.subtotal)
+          transaction.subtotal = parseInt(transaction.subtotal);
+        if (transaction.tax_amount)
+          transaction.tax_amount = parseInt(transaction.tax_amount);
       });
 
       res.status(200).json({ data: trip });
@@ -179,13 +183,11 @@ router.get(
         `
         SELECT
           COUNT(*) as total_transactions,
-          COALESCE(SUM(amount), 0) as calculated_total,
-          AVG(amount) as average_expense,
-          MIN(amount) as min_expense,
-          MAX(amount) as max_expense,
-          SUM(CASE WHEN status = 'processed' THEN 1 ELSE 0 END) as processed_count,
-          SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_count,
-          SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_count
+          COALESCE(SUM(total_amount), 0) as calculated_total,
+          AVG(total_amount) as average_expense,
+          MIN(total_amount) as min_expense,
+          MAX(total_amount) as max_expense,
+          COUNT(CASE WHEN merchant IS NOT NULL THEN 1 END) as transactions_with_merchant
         FROM transactions
         WHERE trip_id = ?
       `,
@@ -211,9 +213,9 @@ router.get(
           average_expense: parseInt(stats.average_expense || 0), // Convert to integer for IDR
           min_expense: parseInt(stats.min_expense || 0), // Convert to integer for IDR
           max_expense: parseInt(stats.max_expense || 0), // Convert to integer for IDR
-          processed_transactions: parseInt(stats.processed_count),
-          pending_transactions: parseInt(stats.pending_count),
-          failed_transactions: parseInt(stats.failed_count),
+          transactions_with_merchant: parseInt(
+            stats.transactions_with_merchant
+          ),
         },
       });
     } catch (err) {

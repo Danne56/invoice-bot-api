@@ -148,9 +148,9 @@ router.post(
       // Calculate total amount from transactions
       const [totalResult] = await db.execute(
         `
-        SELECT COALESCE(SUM(amount), 0) as total_amount
+        SELECT COALESCE(SUM(total_amount), 0) as total_amount
         FROM transactions
-        WHERE trip_id = ? AND status = 'processed'
+        WHERE trip_id = ?
       `,
         [trip.id]
       );
