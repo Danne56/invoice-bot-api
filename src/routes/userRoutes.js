@@ -21,6 +21,10 @@ router.post(
     .trim()
     .escape()
     .withMessage('Event name is required and must be less than 255 characters'),
+  body('currency')
+    .optional()
+    .isIn(['IDR', 'USD'])
+    .withMessage('Currency must be IDR or USD'),
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -31,7 +35,7 @@ router.post(
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { phone_number, event_name } = req.body;
+    const { phone_number, event_name, currency = 'IDR' } = req.body;
     const userId = generateId(12);
     const tripId = generateId(12);
     const db = await pool.getConnection();
@@ -74,10 +78,10 @@ router.post(
       // 2. Create new trip
       await db.execute(
         `
-        INSERT INTO trips (id, phone_number, event_name, started_at, status)
-        VALUES (?, ?, ?, NOW(), 'active')
+        INSERT INTO trips (id, phone_number, event_name, currency, started_at, status)
+        VALUES (?, ?, ?, ?, NOW(), 'active')
       `,
-        [tripId, phone_number, event_name]
+        [tripId, phone_number, event_name, currency]
       );
 
       await db.commit();
@@ -90,7 +94,8 @@ router.post(
         success: true,
         user_id: userId,
         trip_id: tripId,
-        message: `Trip '${event_name}' started successfully.`,
+        currency,
+        message: `Trip '${event_name}' started successfully (currency: ${currency}).`,
       });
     } catch (err) {
       await db.rollback();
@@ -131,7 +136,7 @@ router.post(
       // Find active trip for user
       const [activeTrip] = await db.execute(
         `
-        SELECT t.id, t.event_name, t.total_amount
+        SELECT t.id, t.event_name, t.total_amount, t.currency
         FROM trips t
         WHERE t.phone_number = ? AND t.status = 'active'
       `,
@@ -185,14 +190,27 @@ router.post(
       );
 
       // Format amount with thousand separators for IDR
-      const formattedTotal = parseInt(finalTotal).toLocaleString('id-ID');
+      const currency = trip.currency || 'IDR';
+      const totalMinor = parseInt(finalTotal);
+      const totalMajor =
+        currency === 'USD' ? Number((totalMinor / 100).toFixed(2)) : totalMinor;
+      const formatted =
+        currency === 'USD'
+          ? totalMajor.toLocaleString('en-US', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })
+          : totalMajor.toLocaleString('id-ID');
+      const symbol = currency === 'USD' ? '$' : 'Rp';
 
       res.status(200).json({
         success: true,
         trip_id: trip.id,
         event_name: trip.event_name,
-        total_amount: parseInt(finalTotal),
-        message: `Trip '${trip.event_name}' completed with total expense: Rp ${formattedTotal}`,
+        currency,
+        total_amount_minor: totalMinor,
+        total_amount: totalMajor,
+        message: `Trip '${trip.event_name}' completed with total expense: ${symbol} ${formatted}`,
       });
     } catch (err) {
       await db.rollback();
@@ -225,7 +243,7 @@ router.get(
     try {
       const [users] = await db.execute(
         `
-        SELECT u.*, t.event_name as current_trip_name, t.started_at as trip_started_at, t.total_amount
+        SELECT u.*, t.event_name as current_trip_name, t.started_at as trip_started_at, t.total_amount, t.currency as current_trip_currency
         FROM users u
         LEFT JOIN trips t ON u.current_trip_id = t.id
         WHERE u.phone_number = ?
@@ -240,7 +258,13 @@ router.get(
       // Convert total_amount to integer for IDR if it exists
       const user = users[0];
       if (user.total_amount !== null) {
-        user.total_amount = parseInt(user.total_amount);
+        const currency = user.current_trip_currency || 'IDR';
+        const minor = parseInt(user.total_amount);
+        const major =
+          currency === 'USD' ? Number((minor / 100).toFixed(2)) : minor;
+        user.total_amount_minor = minor;
+        user.total_amount = major;
+        user.currency = currency;
       }
 
       res.status(200).json({ data: user });
@@ -280,6 +304,7 @@ router.get(
           t.event_name,
           t.started_at,
           t.total_amount,
+          t.currency,
           COUNT(tr.id) as transaction_count
         FROM users u
         LEFT JOIN trips t ON u.current_trip_id = t.id
@@ -298,13 +323,21 @@ router.get(
       res.status(200).json({
         is_active: Boolean(status.is_active),
         current_trip: status.trip_id
-          ? {
-              trip_id: status.trip_id,
-              event_name: status.event_name,
-              started_at: status.started_at,
-              total_amount: parseInt(status.total_amount || 0), // Convert to integer for IDR
-              transaction_count: parseInt(status.transaction_count || 0),
-            }
+          ? (() => {
+              const currency = status.currency || 'IDR';
+              const minor = parseInt(status.total_amount || 0);
+              const major =
+                currency === 'USD' ? Number((minor / 100).toFixed(2)) : minor;
+              return {
+                trip_id: status.trip_id,
+                event_name: status.event_name,
+                started_at: status.started_at,
+                currency,
+                total_amount_minor: minor,
+                total_amount: major,
+                transaction_count: parseInt(status.transaction_count || 0),
+              };
+            })()
           : null,
       });
     } catch (err) {
