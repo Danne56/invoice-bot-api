@@ -12,6 +12,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: ${NODE_ENV}
+    image: ghcr.io/danne56/invoice-bot-api:latest
     container_name: invoice-api
     restart: unless-stopped
     environment:
