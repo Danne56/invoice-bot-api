@@ -1,9 +1,183 @@
 const express = require('express');
-const { param, query, validationResult } = require('express-validator');
+const { param, query, body, validationResult } = require('express-validator');
 const pool = require('../utils/db');
 const logger = require('../utils/logger');
+const { generateId } = require('../utils/idGenerator');
 
 const router = express.Router();
+
+/**
+ * POST /api/trips
+ * Create/start a new trip (single active per phone_number)
+ */
+router.post(
+  '/',
+  body('phone_number').isMobilePhone('any').withMessage('Invalid phone number'),
+  body('event_name')
+    .isLength({ min: 1, max: 255 })
+    .trim()
+    .withMessage('Event name must be 1-255 characters'),
+  body('currency')
+    .optional()
+    .isIn(['IDR', 'USD'])
+    .withMessage('Currency must be IDR or USD'),
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { phone_number, event_name, currency = 'IDR' } = req.body;
+    const tripId = generateId(12);
+    const db = await pool.getConnection();
+    try {
+      await db.beginTransaction();
+
+      // Ensure no active trip exists
+      const [active] = await db.execute(
+        `SELECT id FROM trips WHERE phone_number = ? AND status = 'active' LIMIT 1`,
+        [phone_number]
+      );
+      if (active.length > 0) {
+        await db.rollback();
+        return res.status(400).json({
+          error: 'Active trip already exists',
+          active_trip_id: active[0].id,
+        });
+      }
+
+      // Ensure user exists (create if not)
+      const [users] = await db.execute(
+        `SELECT id FROM users WHERE phone_number = ?`,
+        [phone_number]
+      );
+      let userId;
+      if (users.length === 0) {
+        userId = generateId(12);
+        await db.execute(
+          `INSERT INTO users (id, phone_number, is_active, current_trip_id, created_at, updated_at)
+           VALUES (?, ?, 1, ?, NOW(), NOW())`,
+          [userId, phone_number, tripId]
+        );
+      } else {
+        userId = users[0].id;
+        await db.execute(
+          `UPDATE users SET is_active = 1, current_trip_id = ?, updated_at = NOW() WHERE id = ?`,
+          [tripId, userId]
+        );
+      }
+
+      // Create trip
+      await db.execute(
+        `INSERT INTO trips (id, phone_number, event_name, currency, started_at, status, total_amount)
+         VALUES (?, ?, ?, ?, NOW(), 'active', 0)`,
+        [tripId, phone_number, event_name, currency]
+      );
+
+      await db.commit();
+      logger.info(
+        { tripId, userId, phone_number, event_name, currency },
+        'Trip started'
+      );
+      return res.status(201).json({
+        success: true,
+        trip_id: tripId,
+        user_id: userId,
+        currency,
+        event_name,
+        message: `Trip '${event_name}' started (currency: ${currency})`,
+      });
+    } catch (err) {
+      await db.rollback();
+      logger.error({ err, reqBody: req.body }, 'Failed to start trip');
+      return res.status(500).json({ error: 'Failed to start trip' });
+    } finally {
+      db.release();
+    }
+  }
+);
+
+/**
+ * POST /api/trips/:trip_id/stop
+ * Stop a trip and finalize totals
+ */
+router.post(
+  '/:trip_id/stop',
+  param('trip_id')
+    .isString()
+    .isLength({ min: 10, max: 12 })
+    .withMessage('Invalid trip ID'),
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { trip_id } = req.params;
+    const db = await pool.getConnection();
+    try {
+      await db.beginTransaction();
+      const [trips] = await db.execute(
+        `SELECT id, phone_number, event_name, status, currency FROM trips WHERE id = ? FOR UPDATE`,
+        [trip_id]
+      );
+      if (trips.length === 0) {
+        await db.rollback();
+        return res.status(404).json({ error: 'Trip not found' });
+      }
+      const trip = trips[0];
+      if (trip.status !== 'active') {
+        await db.rollback();
+        return res.status(400).json({ error: 'Trip already completed' });
+      }
+
+      const [sumRows] = await db.execute(
+        `SELECT COALESCE(SUM(total_amount),0) as total FROM transactions WHERE trip_id = ?`,
+        [trip_id]
+      );
+      const totalMinor = parseInt(sumRows[0].total);
+
+      await db.execute(
+        `UPDATE trips SET status='completed', ended_at = NOW(), total_amount = ? WHERE id = ?`,
+        [totalMinor, trip_id]
+      );
+
+      await db.execute(
+        `UPDATE users SET is_active = 0, current_trip_id = NULL, updated_at = NOW() WHERE phone_number = ?`,
+        [trip.phone_number]
+      );
+
+      await db.commit();
+      const currency = trip.currency || 'IDR';
+      const totalMajor =
+        currency === 'USD' ? Number((totalMinor / 100).toFixed(2)) : totalMinor;
+      const symbol = currency === 'USD' ? '$' : 'Rp';
+      const formatted =
+        currency === 'USD'
+          ? totalMajor.toLocaleString('en-US', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })
+          : totalMajor.toLocaleString('id-ID');
+      logger.info({ trip_id, totalMinor, currency }, 'Trip stopped');
+      return res.status(200).json({
+        success: true,
+        trip_id,
+        event_name: trip.event_name,
+        currency,
+        total_amount_minor: totalMinor,
+        total_amount: totalMajor,
+        message: `Trip '${trip.event_name}' completed with total expense: ${symbol} ${formatted}`,
+      });
+    } catch (err) {
+      await db.rollback();
+      logger.error({ err, trip_id }, 'Failed to stop trip');
+      return res.status(500).json({ error: 'Failed to stop trip' });
+    } finally {
+      db.release();
+    }
+  }
+);
 
 /**
  * GET /api/trips/:trip_id
