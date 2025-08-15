@@ -5,6 +5,24 @@ const pool = require('../utils/db');
 const logger = require('../utils/logger');
 
 const router = express.Router();
+
+function formatAmountForDisplay(currency, minorAmount) {
+  const major =
+    currency === 'USD' ? Number((minorAmount / 100).toFixed(2)) : minorAmount;
+  const symbol = currency === 'USD' ? '$' : 'Rp';
+
+  if (currency === 'USD') {
+    const formatted = major.toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+    return `${symbol} ${formatted}`;
+  } else {
+    // IDR: Use Indonesian format with periods as thousand separators
+    const formatted = major.toLocaleString('id-ID').replace(/,/g, '.');
+    return `${symbol}${formatted}`;
+  }
+}
 /**
  * POST /api/users
  * Create a user independently (no trip creation)
@@ -106,8 +124,8 @@ router.get(
         const minor = parseInt(user.total_amount);
         const major =
           currency === 'USD' ? Number((minor / 100).toFixed(2)) : minor;
-        user.total_amount_minor = minor;
-        user.total_amount = major;
+        user.amount = major;
+        user.display_amount = formatAmountForDisplay(currency, minor);
         user.currency = currency;
       }
 
@@ -177,8 +195,8 @@ router.get(
                 event_name: status.event_name,
                 started_at: status.started_at,
                 currency,
-                total_amount_minor: minor,
-                total_amount: major,
+                amount: major,
+                display_amount: formatAmountForDisplay(currency, minor),
                 transaction_count: parseInt(status.transaction_count || 0),
               };
             })()

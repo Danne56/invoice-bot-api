@@ -6,6 +6,24 @@ const { generateId } = require('../utils/idGenerator');
 
 const router = express.Router();
 
+function formatAmountForDisplay(currency, minorAmount) {
+  const major =
+    currency === 'USD' ? Number((minorAmount / 100).toFixed(2)) : minorAmount;
+  const symbol = currency === 'USD' ? '$' : 'Rp';
+
+  if (currency === 'USD') {
+    const formatted = major.toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+    return `${symbol} ${formatted}`;
+  } else {
+    // IDR: Use Indonesian format with periods as thousand separators
+    const formatted = major.toLocaleString('id-ID').replace(/,/g, '.');
+    return `${symbol}${formatted}`;
+  }
+}
+
 /**
  * POST /api/trips
  * Create/start a new trip (single active per phone_number)
@@ -151,23 +169,16 @@ router.post(
       const currency = trip.currency || 'IDR';
       const totalMajor =
         currency === 'USD' ? Number((totalMinor / 100).toFixed(2)) : totalMinor;
-      const symbol = currency === 'USD' ? '$' : 'Rp';
-      const formatted =
-        currency === 'USD'
-          ? totalMajor.toLocaleString('en-US', {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })
-          : totalMajor.toLocaleString('id-ID');
+      const displayAmount = formatAmountForDisplay(currency, totalMinor);
       logger.info({ trip_id, totalMinor, currency }, 'Trip stopped');
       return res.status(200).json({
         success: true,
         trip_id,
         event_name: trip.event_name,
         currency,
-        total_amount_minor: totalMinor,
-        total_amount: totalMajor,
-        message: `Trip '${trip.event_name}' completed with total expense: ${symbol} ${formatted}`,
+        amount: totalMajor,
+        display_amount: displayAmount,
+        message: `Trip '${trip.event_name}' completed with total expense: ${displayAmount}`,
       });
     } catch (err) {
       await db.rollback();
@@ -224,11 +235,14 @@ router.get(
       const trip = trips[0];
       const tripCurrency = trip.currency || 'IDR';
       // Convert trip total to major by trip currency
-      trip.total_amount_minor = parseInt(trip.total_amount || 0);
-      trip.total_amount =
+      trip.amount =
         tripCurrency === 'USD'
           ? Number(((trip.total_amount || 0) / 100).toFixed(2))
           : parseInt(trip.total_amount || 0);
+      trip.display_amount = formatAmountForDisplay(
+        tripCurrency,
+        parseInt(trip.total_amount || 0)
+      );
       trip.currency = tripCurrency;
 
       // Map transactions with currency and dual amounts
@@ -237,26 +251,34 @@ router.get(
         const row = {
           ...t,
           currency,
-          total_amount_minor: t.total_amount ? parseInt(t.total_amount) : 0,
-          total_amount: t.total_amount
+          amount: t.total_amount
             ? currency === 'USD'
               ? Number((parseInt(t.total_amount) / 100).toFixed(2))
               : parseInt(t.total_amount)
             : 0,
+          display_amount: t.total_amount
+            ? formatAmountForDisplay(currency, parseInt(t.total_amount))
+            : formatAmountForDisplay(currency, 0),
         };
         if (t.subtotal !== null && t.subtotal !== undefined) {
-          row.subtotal_minor = parseInt(t.subtotal);
-          row.subtotal =
+          row.subtotal_amount =
             currency === 'USD'
               ? Number((parseInt(t.subtotal) / 100).toFixed(2))
               : parseInt(t.subtotal);
+          row.subtotal_display = formatAmountForDisplay(
+            currency,
+            parseInt(t.subtotal)
+          );
         }
         if (t.tax_amount !== null && t.tax_amount !== undefined) {
-          row.tax_amount_minor = parseInt(t.tax_amount);
           row.tax_amount =
             currency === 'USD'
               ? Number((parseInt(t.tax_amount) / 100).toFixed(2))
               : parseInt(t.tax_amount);
+          row.tax_display = formatAmountForDisplay(
+            currency,
+            parseInt(t.tax_amount)
+          );
         }
         return row;
       });
@@ -327,11 +349,14 @@ router.get(
       // Convert totals for each trip using trip currency
       trips.forEach(trip => {
         const currency = trip.currency || 'IDR';
-        trip.total_amount_minor = parseInt(trip.total_amount || 0);
-        trip.total_amount =
+        trip.amount =
           currency === 'USD'
             ? Number(((trip.total_amount || 0) / 100).toFixed(2))
             : parseInt(trip.total_amount || 0);
+        trip.display_amount = formatAmountForDisplay(
+          currency,
+          parseInt(trip.total_amount || 0)
+        );
         trip.currency = currency;
         trip.transaction_count = parseInt(trip.transaction_count);
       });
@@ -435,34 +460,49 @@ router.get(
           ended_at: trip.ended_at,
           status: trip.status,
           currency: tripCurrency,
-          recorded_total_minor: parseInt(trip.total_amount),
-          recorded_total:
+          recorded_total_amount:
             tripCurrency === 'USD'
               ? Number((parseInt(trip.total_amount) / 100).toFixed(2))
               : parseInt(trip.total_amount),
+          recorded_total_display: formatAmountForDisplay(
+            tripCurrency,
+            parseInt(trip.total_amount)
+          ),
         },
         expense_summary: {
           total_transactions: parseInt(stats.total_transactions),
-          calculated_total_minor: parseInt(stats.calculated_total),
-          calculated_total:
+          calculated_total_amount:
             tripCurrency === 'USD'
               ? Number((parseInt(stats.calculated_total) / 100).toFixed(2))
               : parseInt(stats.calculated_total),
-          average_expense_minor: parseInt(stats.average_expense || 0),
-          average_expense:
+          calculated_total_display: formatAmountForDisplay(
+            tripCurrency,
+            parseInt(stats.calculated_total)
+          ),
+          average_expense_amount:
             tripCurrency === 'USD'
               ? Number((parseInt(stats.average_expense || 0) / 100).toFixed(2))
               : parseInt(stats.average_expense || 0),
-          min_expense_minor: parseInt(stats.min_expense || 0),
-          min_expense:
+          average_expense_display: formatAmountForDisplay(
+            tripCurrency,
+            parseInt(stats.average_expense || 0)
+          ),
+          min_expense_amount:
             tripCurrency === 'USD'
               ? Number((parseInt(stats.min_expense || 0) / 100).toFixed(2))
               : parseInt(stats.min_expense || 0),
-          max_expense_minor: parseInt(stats.max_expense || 0),
-          max_expense:
+          min_expense_display: formatAmountForDisplay(
+            tripCurrency,
+            parseInt(stats.min_expense || 0)
+          ),
+          max_expense_amount:
             tripCurrency === 'USD'
               ? Number((parseInt(stats.max_expense || 0) / 100).toFixed(2))
               : parseInt(stats.max_expense || 0),
+          max_expense_display: formatAmountForDisplay(
+            tripCurrency,
+            parseInt(stats.max_expense || 0)
+          ),
           transactions_with_merchant: parseInt(
             stats.transactions_with_merchant
           ),

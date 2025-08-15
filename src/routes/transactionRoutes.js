@@ -39,6 +39,24 @@ function isValidAmountByCurrency(currency, raw, { allowZero = false } = {}) {
   return allowZero ? num >= 0 : num > 0;
 }
 
+function formatAmountForDisplay(currency, minorAmount) {
+  const major =
+    currency === 'USD' ? Number((minorAmount / 100).toFixed(2)) : minorAmount;
+  const symbol = currency === 'USD' ? '$' : 'Rp';
+
+  if (currency === 'USD') {
+    const formatted = major.toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+    return `${symbol} ${formatted}`;
+  } else {
+    // IDR: Use Indonesian format with periods as thousand separators
+    const formatted = major.toLocaleString('id-ID').replace(/,/g, '.');
+    return `${symbol}${formatted}`;
+  }
+}
+
 async function getTripAndEnforceCurrency(db, tripId, requestedCurrency) {
   const [trips] = await db.execute(
     `SELECT id, status, event_name, currency FROM trips WHERE id = ?`,
@@ -212,21 +230,17 @@ router.post(
 
       // Format amount with thousand separators for IDR
       const major = toMajor(currency, toMinor(currency, total_amount));
-      const message =
-        currency === 'USD'
-          ? `Invoice of $ ${major.toLocaleString('en-US', {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })} recorded successfully`
-          : `Invoice of Rp ${major.toLocaleString('id-ID')} recorded successfully`;
+      const minorAmount = toMinor(currency, total_amount);
+      const displayAmount = formatAmountForDisplay(currency, minorAmount);
+      const message = `Invoice of ${displayAmount} recorded successfully`;
 
       res.status(201).json({
         success: true,
         transaction_id: transactionId,
         trip_id,
         currency,
-        total_amount_minor: toMinor(currency, total_amount),
-        total_amount: major,
+        amount: major,
+        display_amount: displayAmount,
         merchant: merchant || null,
         message,
       });
@@ -278,274 +292,30 @@ router.get(
       const payload = {
         ...t,
         currency,
-        total_amount_minor: t.total_amount ? parseInt(t.total_amount) : 0,
-        total_amount: t.total_amount ? toMajor(currency, t.total_amount) : 0,
+        amount: t.total_amount ? toMajor(currency, t.total_amount) : 0,
+        display_amount: t.total_amount
+          ? formatAmountForDisplay(currency, parseInt(t.total_amount))
+          : formatAmountForDisplay(currency, 0),
       };
       if (t.subtotal !== null && t.subtotal !== undefined) {
-        payload.subtotal_minor = parseInt(t.subtotal);
-        payload.subtotal = toMajor(currency, t.subtotal);
+        payload.subtotal_amount = toMajor(currency, t.subtotal);
+        payload.subtotal_display = formatAmountForDisplay(
+          currency,
+          parseInt(t.subtotal)
+        );
       }
       if (t.tax_amount !== null && t.tax_amount !== undefined) {
-        payload.tax_amount_minor = parseInt(t.tax_amount);
         payload.tax_amount = toMajor(currency, t.tax_amount);
+        payload.tax_display = formatAmountForDisplay(
+          currency,
+          parseInt(t.tax_amount)
+        );
       }
 
       res.status(200).json({ data: payload });
     } catch (err) {
       logger.error({ err, transaction_id }, 'Failed to fetch transaction');
       res.status(500).json({ error: 'Failed to fetch transaction' });
-    } finally {
-      db.release();
-    }
-  }
-);
-
-/**
- * PUT /api/transactions/:transaction_id
- * Update transaction details
- */
-router.put(
-  '/:transaction_id',
-  param('transaction_id')
-    .isString()
-    .isLength({ min: 10, max: 12 })
-    .withMessage('Invalid transaction ID'),
-  body('currency')
-    .optional()
-    .isIn(['IDR', 'USD'])
-    .withMessage('Currency must be IDR or USD'),
-  body('total_amount')
-    .optional()
-    .custom((value, { req }) => {
-      const currency = req.body.currency || 'IDR';
-      if (!isValidAmountByCurrency(currency, value)) {
-        throw new Error(
-          currency === 'USD'
-            ? 'Total amount (USD) must be a positive number with up to 2 decimals'
-            : 'Total amount (IDR) must be a positive integer'
-        );
-      }
-      return true;
-    }),
-  body('merchant')
-    .optional()
-    .isLength({ max: 100 })
-    .trim()
-    .withMessage('Merchant name must be less than 100 characters'),
-  body('date')
-    .optional()
-    .isISO8601()
-    .withMessage('Date must be in ISO 8601 format (YYYY-MM-DD)'),
-  body('subtotal')
-    .optional()
-    .custom((value, { req }) => {
-      const currency = req.body.currency || 'IDR';
-      if (!isValidAmountByCurrency(currency, value, { allowZero: true })) {
-        throw new Error(
-          currency === 'USD'
-            ? 'Subtotal (USD) must be a non-negative number with up to 2 decimals'
-            : 'Subtotal (IDR) must be a non-negative integer'
-        );
-      }
-      return true;
-    }),
-  body('tax_amount')
-    .optional()
-    .custom((value, { req }) => {
-      const currency = req.body.currency || 'IDR';
-      if (!isValidAmountByCurrency(currency, value, { allowZero: true })) {
-        throw new Error(
-          currency === 'USD'
-            ? 'Tax amount (USD) must be a non-negative number with up to 2 decimals'
-            : 'Tax amount (IDR) must be a non-negative integer'
-        );
-      }
-      return true;
-    }),
-  body('item_count')
-    .optional()
-    .isInt({ min: 1 })
-    .withMessage('Item count must be a positive integer'),
-  body('item_summary')
-    .optional()
-    .isLength({ max: 5000 })
-    .trim()
-    .withMessage('Item summary must be less than 5000 characters'),
-  async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const { transaction_id } = req.params;
-    const {
-      total_amount,
-      merchant,
-      date,
-      subtotal,
-      tax_amount,
-      item_count,
-      item_summary,
-      currency,
-    } = req.body;
-    const db = await pool.getConnection();
-
-    try {
-      // Check if transaction exists and get trip status
-      const [existing] = await db.execute(
-        `
-        SELECT t.*, tr.status as trip_status, tr.currency as trip_currency
-        FROM transactions t
-        JOIN trips tr ON t.trip_id = tr.id
-        WHERE t.id = ?
-      `,
-        [transaction_id]
-      );
-
-      if (existing.length === 0) {
-        return res.status(404).json({ error: 'Transaction not found' });
-      }
-
-      if (existing[0].trip_status === 'completed') {
-        return res
-          .status(400)
-          .json({ error: 'Cannot modify transactions for a completed trip' });
-      }
-
-      const txCurrency =
-        existing[0].currency || existing[0].trip_currency || 'IDR';
-      if (currency && currency !== txCurrency) {
-        return res.status(400).json({
-          error: `Cannot change transaction currency from ${txCurrency} to ${currency}`,
-        });
-      }
-
-      // Build update query dynamically
-      const updates = [];
-      const params = [];
-
-      if (total_amount !== undefined) {
-        updates.push('total_amount = ?');
-        params.push(toMinor(txCurrency, total_amount));
-      }
-      if (merchant !== undefined) {
-        updates.push('merchant = ?');
-        params.push(merchant);
-      }
-      if (date !== undefined) {
-        updates.push('date = ?');
-        params.push(date);
-      }
-      if (subtotal !== undefined) {
-        updates.push('subtotal = ?');
-        params.push(subtotal !== null ? toMinor(txCurrency, subtotal) : null);
-      }
-      if (tax_amount !== undefined) {
-        updates.push('tax_amount = ?');
-        params.push(
-          tax_amount !== null ? toMinor(txCurrency, tax_amount) : null
-        );
-      }
-      if (item_count !== undefined) {
-        updates.push('item_count = ?');
-        params.push(item_count ? parseInt(item_count) : null);
-      }
-      if (item_summary !== undefined) {
-        updates.push('item_summary = ?');
-        params.push(item_summary);
-      }
-
-      if (updates.length === 0) {
-        return res
-          .status(400)
-          .json({ error: 'No valid fields provided for update' });
-      }
-
-      params.push(transaction_id);
-
-      await db.execute(
-        `
-        UPDATE transactions
-        SET ${updates.join(', ')}
-        WHERE id = ?
-      `,
-        params
-      );
-
-      logger.info(
-        { transaction_id, updates },
-        'Transaction updated successfully'
-      );
-
-      res.status(200).json({
-        success: true,
-        transaction_id,
-        message: 'Transaction updated successfully',
-      });
-    } catch (err) {
-      logger.error({ err, transaction_id }, 'Failed to update transaction');
-      res.status(500).json({ error: 'Failed to update transaction' });
-    } finally {
-      db.release();
-    }
-  }
-);
-
-/**
- * DELETE /api/transactions/:transaction_id
- * Delete a transaction
- */
-router.delete(
-  '/:transaction_id',
-  param('transaction_id')
-    .isString()
-    .isLength({ min: 10, max: 12 })
-    .withMessage('Invalid transaction ID'),
-  async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const { transaction_id } = req.params;
-    const db = await pool.getConnection();
-
-    try {
-      // Check if transaction exists and get trip status
-      const [existing] = await db.execute(
-        `
-        SELECT t.*, tr.status as trip_status
-        FROM transactions t
-        JOIN trips tr ON t.trip_id = tr.id
-        WHERE t.id = ?
-      `,
-        [transaction_id]
-      );
-
-      if (existing.length === 0) {
-        return res.status(404).json({ error: 'Transaction not found' });
-      }
-
-      if (existing[0].trip_status === 'completed') {
-        return res
-          .status(400)
-          .json({ error: 'Cannot delete transactions from a completed trip' });
-      }
-
-      // Delete transaction
-      await db.execute('DELETE FROM transactions WHERE id = ?', [
-        transaction_id,
-      ]);
-
-      logger.info({ transaction_id }, 'Transaction deleted successfully');
-
-      res.status(200).json({
-        success: true,
-        message: 'Transaction deleted successfully',
-      });
-    } catch (err) {
-      logger.error({ err, transaction_id }, 'Failed to delete transaction');
-      res.status(500).json({ error: 'Failed to delete transaction' });
     } finally {
       db.release();
     }
@@ -643,16 +413,24 @@ router.get(
         const row = {
           ...t,
           currency,
-          total_amount_minor: t.total_amount ? parseInt(t.total_amount) : 0,
-          total_amount: t.total_amount ? toMajor(currency, t.total_amount) : 0,
+          amount: t.total_amount ? toMajor(currency, t.total_amount) : 0,
+          display_amount: t.total_amount
+            ? formatAmountForDisplay(currency, parseInt(t.total_amount))
+            : formatAmountForDisplay(currency, 0),
         };
         if (t.subtotal !== null && t.subtotal !== undefined) {
-          row.subtotal_minor = parseInt(t.subtotal);
-          row.subtotal = toMajor(currency, t.subtotal);
+          row.subtotal_amount = toMajor(currency, t.subtotal);
+          row.subtotal_display = formatAmountForDisplay(
+            currency,
+            parseInt(t.subtotal)
+          );
         }
         if (t.tax_amount !== null && t.tax_amount !== undefined) {
-          row.tax_amount_minor = parseInt(t.tax_amount);
           row.tax_amount = toMajor(currency, t.tax_amount);
+          row.tax_display = formatAmountForDisplay(
+            currency,
+            parseInt(t.tax_amount)
+          );
         }
         return row;
       });
