@@ -53,5 +53,24 @@ CREATE TABLE IF NOT EXISTS transactions (
 ALTER TABLE users
 ADD FOREIGN KEY (current_trip_id) REFERENCES trips(id) ON DELETE SET NULL;
 
+-- Webhook timers table for timer-based webhook system
+CREATE TABLE IF NOT EXISTS webhook_timers (
+    id VARCHAR(12) PRIMARY KEY,  -- Custom ID from nanoid
+    trip_id VARCHAR(12) NOT NULL,
+    webhook_url TEXT NOT NULL,
+    sender_id VARCHAR(12) NULL,  -- References users(id), who created the timer
+    deadline_timestamp BIGINT NOT NULL,  -- Unix timestamp in milliseconds
+    status ENUM('active', 'expired', 'completed') NOT NULL DEFAULT 'active',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE,
+    FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE SET NULL,
+    INDEX idx_trip_id (trip_id),
+    INDEX idx_deadline (deadline_timestamp),
+    INDEX idx_status (status),
+    INDEX idx_status_deadline (status, deadline_timestamp),
+    INDEX idx_sender_id (sender_id)
+);
+
 -- Show created tables
 SHOW TABLES;
