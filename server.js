@@ -25,8 +25,8 @@ async function startServer() {
   }
 
   // Handle server errors
-  server.on('error', error => {
-    logger.error('Server error:', error);
+  server.on('error', err => {
+    logger.error('Server error:', err);
     process.exit(1);
   });
 }
