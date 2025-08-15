@@ -79,14 +79,12 @@ router.post(
         { tripId, userId, phone_number, event_name, currency },
         'Trip started'
       );
-      return res.status(201).json({
-        success: true,
-        trip_id: tripId,
-        user_id: userId,
-        currency,
-        event_name,
-        message: `Trip '${event_name}' started (currency: ${currency})`,
-      });
+      // Fetch the created trip to return it
+      const [newTrip] = await db.execute(
+        `SELECT * FROM trips WHERE id = ?`,
+        [tripId]
+      );
+      return res.status(201).json({ data: newTrip[0] });
     } catch (err) {
       await db.rollback();
       logger.error({ err, reqBody: req.body }, 'Failed to start trip');
@@ -148,27 +146,14 @@ router.post(
       );
 
       await db.commit();
-      const currency = trip.currency || 'IDR';
-      const totalMajor =
-        currency === 'USD' ? Number((totalMinor / 100).toFixed(2)) : totalMinor;
-      const symbol = currency === 'USD' ? '$' : 'Rp';
-      const formatted =
-        currency === 'USD'
-          ? totalMajor.toLocaleString('en-US', {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })
-          : totalMajor.toLocaleString('id-ID');
-      logger.info({ trip_id, totalMinor, currency }, 'Trip stopped');
-      return res.status(200).json({
-        success: true,
-        trip_id,
-        event_name: trip.event_name,
-        currency,
-        total_amount_minor: totalMinor,
-        total_amount: totalMajor,
-        message: `Trip '${trip.event_name}' completed with total expense: ${symbol} ${formatted}`,
-      });
+      logger.info({ trip_id, totalMinor }, 'Trip stopped');
+
+      const [updatedTrip] = await db.execute(
+        `SELECT * FROM trips WHERE id = ?`,
+        [trip_id]
+      );
+
+      return res.status(200).json({ data: updatedTrip[0] });
     } catch (err) {
       await db.rollback();
       logger.error({ err, trip_id }, 'Failed to stop trip');
@@ -181,7 +166,7 @@ router.post(
 
 /**
  * GET /api/trips/:trip_id
- * Get trip details with transactions
+ * Get trip details
  */
 router.get(
   '/:trip_id',
@@ -211,16 +196,6 @@ router.get(
         return res.status(404).json({ error: 'Trip not found' });
       }
 
-      // Get transactions for this trip
-      const [transactions] = await db.execute(
-        `
-        SELECT * FROM transactions
-        WHERE trip_id = ?
-        ORDER BY recorded_at DESC
-      `,
-        [trip_id]
-      );
-
       const trip = trips[0];
       const tripCurrency = trip.currency || 'IDR';
       // Convert trip total to major by trip currency
@@ -230,36 +205,6 @@ router.get(
           ? Number(((trip.total_amount || 0) / 100).toFixed(2))
           : parseInt(trip.total_amount || 0);
       trip.currency = tripCurrency;
-
-      // Map transactions with currency and dual amounts
-      trip.transactions = transactions.map(t => {
-        const currency = t.currency || tripCurrency;
-        const row = {
-          ...t,
-          currency,
-          total_amount_minor: t.total_amount ? parseInt(t.total_amount) : 0,
-          total_amount: t.total_amount
-            ? currency === 'USD'
-              ? Number((parseInt(t.total_amount) / 100).toFixed(2))
-              : parseInt(t.total_amount)
-            : 0,
-        };
-        if (t.subtotal !== null && t.subtotal !== undefined) {
-          row.subtotal_minor = parseInt(t.subtotal);
-          row.subtotal =
-            currency === 'USD'
-              ? Number((parseInt(t.subtotal) / 100).toFixed(2))
-              : parseInt(t.subtotal);
-        }
-        if (t.tax_amount !== null && t.tax_amount !== undefined) {
-          row.tax_amount_minor = parseInt(t.tax_amount);
-          row.tax_amount =
-            currency === 'USD'
-              ? Number((parseInt(t.tax_amount) / 100).toFixed(2))
-              : parseInt(t.tax_amount);
-        }
-        return row;
-      });
 
       res.status(200).json({ data: trip });
     } catch (err) {

@@ -203,33 +203,18 @@ router.post(
         {
           transactionId,
           trip_id,
-          total_amount: parseInt(total_amount),
           merchant: merchant || 'No merchant',
           item_count: item_count || 0,
         },
         'Invoice transaction created successfully'
       );
 
-      // Format amount with thousand separators for IDR
-      const major = toMajor(currency, toMinor(currency, total_amount));
-      const message =
-        currency === 'USD'
-          ? `Invoice of $ ${major.toLocaleString('en-US', {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })} recorded successfully`
-          : `Invoice of Rp ${major.toLocaleString('id-ID')} recorded successfully`;
+      const [newTransaction] = await db.execute(
+        `SELECT * FROM transactions WHERE id = ?`,
+        [transactionId]
+      );
 
-      res.status(201).json({
-        success: true,
-        transaction_id: transactionId,
-        trip_id,
-        currency,
-        total_amount_minor: toMinor(currency, total_amount),
-        total_amount: major,
-        merchant: merchant || null,
-        message,
-      });
+      res.status(201).json({ data: newTransaction[0] });
     } catch (err) {
       logger.error({ err, reqBody: req.body }, 'Failed to create transaction');
       res.status(500).json({ error: 'Failed to record transaction' });
@@ -477,11 +462,12 @@ router.put(
         'Transaction updated successfully'
       );
 
-      res.status(200).json({
-        success: true,
-        transaction_id,
-        message: 'Transaction updated successfully',
-      });
+      const [updatedTransaction] = await db.execute(
+        `SELECT * FROM transactions WHERE id = ?`,
+        [transaction_id]
+      );
+
+      res.status(200).json({ data: updatedTransaction[0] });
     } catch (err) {
       logger.error({ err, transaction_id }, 'Failed to update transaction');
       res.status(500).json({ error: 'Failed to update transaction' });
@@ -523,7 +509,8 @@ router.delete(
       );
 
       if (existing.length === 0) {
-        return res.status(404).json({ error: 'Transaction not found' });
+        // To maintain idempotency, if it doesn't exist, it's already deleted.
+        return res.status(204).send();
       }
 
       if (existing[0].trip_status === 'completed') {
@@ -539,10 +526,7 @@ router.delete(
 
       logger.info({ transaction_id }, 'Transaction deleted successfully');
 
-      res.status(200).json({
-        success: true,
-        message: 'Transaction deleted successfully',
-      });
+      res.status(204).send();
     } catch (err) {
       logger.error({ err, transaction_id }, 'Failed to delete transaction');
       res.status(500).json({ error: 'Failed to delete transaction' });
