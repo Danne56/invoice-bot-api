@@ -157,11 +157,11 @@ class CronJobManager {
 
   /**
    * Process a single expired job - make webhook call
-   * @param {Object} job - Job object with tripId, webhookUrl, deadline
+   * @param {Object} job - Job object with tripId, webhookUrl, deadline, phoneNumber
    * @returns {Promise<Object>} Result of webhook call
    */
   async processExpiredJob(job) {
-    const { tripId, webhookUrl, deadline } = job;
+    const { tripId, webhookUrl, deadline, phoneNumber } = job;
 
     try {
       const delay = Date.now() - deadline;
@@ -177,6 +177,7 @@ class CronJobManager {
       // Prepare webhook payload
       const payload = {
         tripId,
+        phoneNumber: phoneNumber || null,
         message: 'Timer selesai',
         timestamp: new Date().toISOString(),
         originalDeadline: new Date(deadline).toISOString(),

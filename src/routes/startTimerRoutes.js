@@ -3,6 +3,7 @@ const { body, validationResult } = require('express-validator');
 const logger = require('../utils/logger');
 const jobManager = require('../utils/jobManager');
 const cronJobManager = require('../utils/cronJobs');
+const pool = require('../utils/db');
 const {
   formatDuration,
   formatRelativeTime,
@@ -35,6 +36,10 @@ router.post(
         require_tld: false, // Allow localhost URLs
       })
       .withMessage('webhookUrl must be a valid HTTP/HTTPS URL'),
+    body('phoneNumber')
+      .optional()
+      .isMobilePhone('any')
+      .withMessage('phoneNumber must be a valid mobile phone number'),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -51,9 +56,41 @@ router.post(
       });
     }
 
-    const { tripId, webhookUrl } = req.body;
+    const { tripId, webhookUrl, phoneNumber } = req.body;
 
     try {
+      let senderId = null;
+      let senderPhoneNumber = null;
+
+      // Look up user by phone number if provided
+      if (phoneNumber) {
+        const connection = await pool.getConnection();
+        try {
+          const [users] = await connection.execute(
+            'SELECT id, phone_number FROM users WHERE phone_number = ?',
+            [phoneNumber]
+          );
+
+          if (users.length > 0) {
+            senderId = users[0].id;
+            senderPhoneNumber = users[0].phone_number;
+            logger.debug({
+              message: 'User found for phone number',
+              phoneNumber,
+              senderId,
+            });
+          } else {
+            logger.warn({
+              message: 'User not found for phone number',
+              phoneNumber,
+            });
+            // Continue without sender ID - we'll still create the timer
+          }
+        } finally {
+          connection.release();
+        }
+      }
+
       // Ensure cron job is running
       const cronStatus = cronJobManager.getStatus();
       if (!cronStatus.running) {
@@ -69,7 +106,7 @@ router.post(
       const isRestart = !!existingJob;
 
       // Add or update the job (handles restart logic)
-      const job = await jobManager.addOrUpdateJob(tripId, webhookUrl);
+      const job = await jobManager.addOrUpdateJob(tripId, webhookUrl, senderId);
 
       const timeUntilExpiry = job.deadline - Date.now();
       const timerStatus = getTimerStatus(timeUntilExpiry);
@@ -91,6 +128,8 @@ router.post(
         success: true,
         tripId: job.tripId,
         webhookUrl: job.webhookUrl,
+        senderId: job.senderId,
+        phoneNumber: senderPhoneNumber,
         deadline: job.deadline,
         deadlineISO: new Date(job.deadline).toISOString(),
         timeUntilExpiry,

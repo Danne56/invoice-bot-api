@@ -24,6 +24,7 @@ class JobManager {
           id VARCHAR(12) PRIMARY KEY,
           trip_id VARCHAR(12) NOT NULL,
           webhook_url TEXT NOT NULL,
+          sender_id VARCHAR(12) NULL,
           deadline_timestamp BIGINT NOT NULL,
           status ENUM('active', 'expired', 'completed') NOT NULL DEFAULT 'active',
           created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -31,7 +32,9 @@ class JobManager {
           INDEX idx_trip_id (trip_id),
           INDEX idx_deadline (deadline_timestamp),
           INDEX idx_status (status),
-          INDEX idx_status_deadline (status, deadline_timestamp)
+          INDEX idx_status_deadline (status, deadline_timestamp),
+          INDEX idx_sender_id (sender_id),
+          FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE SET NULL
         )
       `);
 
@@ -59,12 +62,14 @@ class JobManager {
       connection = await pool.getConnection();
 
       const [rows] = await connection.execute(`
-        SELECT id, trip_id as tripId, webhook_url as webhookUrl,
-               deadline_timestamp as deadline, status, created_at as createdAt,
-               updated_at as updatedAt
-        FROM webhook_timers
-        WHERE status = 'active'
-        ORDER BY deadline_timestamp ASC
+        SELECT wt.id, wt.trip_id as tripId, wt.webhook_url as webhookUrl,
+               wt.sender_id as senderId, wt.deadline_timestamp as deadline,
+               wt.status, wt.created_at as createdAt, wt.updated_at as updatedAt,
+               u.phone_number as phoneNumber
+        FROM webhook_timers wt
+        LEFT JOIN users u ON wt.sender_id = u.id
+        WHERE wt.status = 'active'
+        ORDER BY wt.deadline_timestamp ASC
       `);
 
       const jobs = rows.map(row => ({
@@ -96,9 +101,10 @@ class JobManager {
    * If tripId already exists, updates the deadline (timer restart)
    * @param {string|number} tripId - Trip identifier
    * @param {string} webhookUrl - Webhook URL to call when timer expires
+   * @param {string|null} senderId - User ID who created the timer
    * @returns {Promise<Object>} Job object that was added/updated
    */
-  async addOrUpdateJob(tripId, webhookUrl) {
+  async addOrUpdateJob(tripId, webhookUrl, senderId = null) {
     let connection;
     try {
       connection = await pool.getConnection();
@@ -109,7 +115,7 @@ class JobManager {
 
       // Check if job already exists
       const [existing] = await connection.execute(
-        `SELECT id, created_at FROM webhook_timers WHERE trip_id = ? AND status = 'active'`,
+        `SELECT id, created_at, sender_id FROM webhook_timers WHERE trip_id = ? AND status = 'active'`,
         [tripIdStr]
       );
 
@@ -120,16 +126,17 @@ class JobManager {
         await connection.execute(
           `
           UPDATE webhook_timers
-          SET webhook_url = ?, deadline_timestamp = ?, updated_at = NOW()
+          SET webhook_url = ?, sender_id = ?, deadline_timestamp = ?, updated_at = NOW()
           WHERE trip_id = ? AND status = 'active'
         `,
-          [webhookUrl, deadline, tripIdStr]
+          [webhookUrl, senderId, deadline, tripIdStr]
         );
 
         jobData = {
           id: existing[0].id,
           tripId: tripIdStr,
           webhookUrl,
+          senderId,
           deadline,
           status: 'active',
           createdAt: existing[0].created_at.toISOString(),
@@ -140,6 +147,7 @@ class JobManager {
           message: 'Job updated - timer restarted',
           tripId: tripIdStr,
           webhookUrl,
+          senderId,
           deadline,
         });
       } else {
@@ -150,16 +158,17 @@ class JobManager {
         await connection.execute(
           `
           INSERT INTO webhook_timers
-          (id, trip_id, webhook_url, deadline_timestamp, status, created_at, updated_at)
-          VALUES (?, ?, ?, ?, 'active', NOW(), NOW())
+          (id, trip_id, webhook_url, sender_id, deadline_timestamp, status, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, 'active', NOW(), NOW())
         `,
-          [jobId, tripIdStr, webhookUrl, deadline]
+          [jobId, tripIdStr, webhookUrl, senderId, deadline]
         );
 
         jobData = {
           id: jobId,
           tripId: tripIdStr,
           webhookUrl,
+          senderId,
           deadline,
           status: 'active',
           createdAt: now.toISOString(),
@@ -170,6 +179,7 @@ class JobManager {
           message: 'New job added',
           tripId: tripIdStr,
           webhookUrl,
+          senderId,
           deadline,
           jobId,
         });
@@ -241,12 +251,14 @@ class JobManager {
 
       const [rows] = await connection.execute(
         `
-        SELECT id, trip_id as tripId, webhook_url as webhookUrl,
-               deadline_timestamp as deadline, status, created_at as createdAt,
-               updated_at as updatedAt
-        FROM webhook_timers
-        WHERE status = 'active' AND deadline_timestamp <= ?
-        ORDER BY deadline_timestamp ASC
+        SELECT wt.id, wt.trip_id as tripId, wt.webhook_url as webhookUrl,
+               wt.sender_id as senderId, wt.deadline_timestamp as deadline,
+               wt.status, wt.created_at as createdAt, wt.updated_at as updatedAt,
+               u.phone_number as phoneNumber
+        FROM webhook_timers wt
+        LEFT JOIN users u ON wt.sender_id = u.id
+        WHERE wt.status = 'active' AND wt.deadline_timestamp <= ?
+        ORDER BY wt.deadline_timestamp ASC
       `,
         [now]
       );
@@ -348,11 +360,13 @@ class JobManager {
 
       const [rows] = await connection.execute(
         `
-        SELECT id, trip_id as tripId, webhook_url as webhookUrl,
-               deadline_timestamp as deadline, status, created_at as createdAt,
-               updated_at as updatedAt
-        FROM webhook_timers
-        WHERE trip_id = ? AND status = 'active'
+        SELECT wt.id, wt.trip_id as tripId, wt.webhook_url as webhookUrl,
+               wt.sender_id as senderId, wt.deadline_timestamp as deadline,
+               wt.status, wt.created_at as createdAt, wt.updated_at as updatedAt,
+               u.phone_number as phoneNumber
+        FROM webhook_timers wt
+        LEFT JOIN users u ON wt.sender_id = u.id
+        WHERE wt.trip_id = ? AND wt.status = 'active'
         LIMIT 1
       `,
         [tripId.toString()]

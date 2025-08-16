@@ -45,6 +45,8 @@ router.get('/status/:tripId', async (req, res) => {
       success: true,
       tripId: job.tripId,
       webhookUrl: job.webhookUrl,
+      senderId: job.senderId,
+      phoneNumber: job.phoneNumber,
       deadline: job.deadline,
       deadlineISO: new Date(job.deadline).toISOString(),
       timeRemaining: Math.max(0, timeRemaining),
