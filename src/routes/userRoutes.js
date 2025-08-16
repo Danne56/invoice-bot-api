@@ -1,67 +1,53 @@
 const express = require('express');
 const { body, param, validationResult } = require('express-validator');
-const { generateId } = require('../utils/idGenerator');
-const pool = require('../utils/db');
+const UserModel = require('../models/userModel');
 const logger = require('../utils/logger');
+const { formatAmountForDisplay, toMajor } = require('../utils/currency');
 
 const router = express.Router();
 
-function formatAmountForDisplay(currency, minorAmount) {
-  const major =
-    currency === 'USD' ? Number((minorAmount / 100).toFixed(2)) : minorAmount;
-  const symbol = currency === 'USD' ? '$' : 'Rp';
+function formatUserStatusResponse(status) {
+  const response = {
+    is_active: Boolean(status.is_active),
+    current_trip: null,
+  };
 
-  if (currency === 'USD') {
-    const formatted = major.toLocaleString('en-US', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    });
-    return `${symbol} ${formatted}`;
-  } else {
-    // IDR: Use Indonesian format with periods as thousand separators
-    const formatted = major.toLocaleString('id-ID').replace(/,/g, '.');
-    return `${symbol}${formatted}`;
+  if (status.trip_id) {
+    const currency = status.currency || 'IDR';
+    const minor = parseInt(status.total_amount || 0, 10);
+    response.current_trip = {
+      trip_id: status.trip_id,
+      event_name: status.event_name,
+      started_at: status.started_at,
+      currency,
+      amount: toMajor(currency, minor),
+      display_amount: formatAmountForDisplay(currency, minor),
+      transaction_count: parseInt(status.transaction_count || 0, 10),
+    };
   }
+  return response;
 }
-/**
- * POST /api/users
- * Create a user independently (no trip creation)
- */
+
+const handleValidationErrors = (req, res, next) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    logger.warn({ errors: errors.array(), reqBody: req.body });
+    return res.status(400).json({ errors: errors.array() });
+  }
+  next();
+};
+
 router.post(
   '/',
   body('phone_number')
     .isMobilePhone('any')
     .notEmpty()
     .withMessage('Invalid phone number'),
-  async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      logger.warn(
-        { errors: errors.array(), reqBody: req.body },
-        'Validation failed for POST /api/users'
-      );
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const { phone_number } = req.body;
-    const userId = generateId(12);
-    const db = await pool.getConnection();
+  handleValidationErrors,
+  async (req, res, next) => {
     try {
-      await db.execute(
-        `INSERT INTO users (id, phone_number, is_active, created_at, updated_at)
-         VALUES (?, ?, 0, NOW(), NOW())
-         ON DUPLICATE KEY UPDATE updated_at = NOW()`,
-        [userId, phone_number]
-      );
-
-      // Fetch current state
-      const [rows] = await db.execute(
-        `SELECT id, phone_number, is_active, current_trip_id, created_at, updated_at
-         FROM users WHERE phone_number = ?`,
-        [phone_number]
-      );
-      const user = rows[0];
-
+      const { phone_number } = req.body;
+      const user = await UserModel.ensureUser(phone_number);
       res.status(201).json({
         success: true,
         user: {
@@ -75,138 +61,63 @@ router.post(
         message: 'User ensured/created successfully',
       });
     } catch (err) {
-      await db.rollback();
       logger.error({ err, reqBody: req.body }, 'Failed to create user');
-      res.status(500).json({ error: 'Failed to create user' });
-    } finally {
-      db.release();
+      next(err);
     }
   }
 );
 
-/**
- * GET /api/users/:phone_number
- * Get user information including current trip
- */
 router.get(
-  '/:phone_number',
-  param('phone_number')
+  '/:phoneNumber',
+  param('phoneNumber')
     .isMobilePhone('any')
     .withMessage('Invalid phone number'),
-  async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const { phone_number } = req.params;
-    const db = await pool.getConnection();
-
+  handleValidationErrors,
+  async (req, res, next) => {
     try {
-      const [users] = await db.execute(
-        `
-        SELECT u.*, t.event_name as current_trip_name, t.started_at as trip_started_at, t.total_amount, t.currency as current_trip_currency
-        FROM users u
-        LEFT JOIN trips t ON u.current_trip_id = t.id
-        WHERE u.phone_number = ?
-      `,
-        [phone_number]
-      );
-
-      if (users.length === 0) {
+      const { phoneNumber } = req.params;
+      const user = await UserModel.findByPhoneNumber(phoneNumber);
+      if (!user) {
         return res.status(404).json({ error: 'User not found' });
       }
-
-      // Convert total_amount to integer for IDR if it exists
-      const user = users[0];
       if (user.total_amount !== null) {
         const currency = user.current_trip_currency || 'IDR';
-        const minor = parseInt(user.total_amount);
-        const major =
-          currency === 'USD' ? Number((minor / 100).toFixed(2)) : minor;
-        user.amount = major;
+        const minor = parseInt(user.total_amount, 10);
+        user.amount = toMajor(currency, minor);
         user.display_amount = formatAmountForDisplay(currency, minor);
         user.currency = currency;
       }
-
       res.status(200).json({ data: user });
     } catch (err) {
-      logger.error({ err, phone_number }, 'Failed to fetch user');
-      res.status(500).json({ error: 'Failed to fetch user' });
-    } finally {
-      db.release();
+      logger.error(
+        { err, phone_number: req.params.phoneNumber },
+        'Failed to fetch user'
+      );
+      next(err);
     }
   }
 );
 
-/**
- * GET /api/users/:phone_number/status
- * Get user's current trip status
- */
 router.get(
-  '/:phone_number/status',
-  param('phone_number')
+  '/:phoneNumber/status',
+  param('phoneNumber')
     .isMobilePhone('any')
     .withMessage('Invalid phone number'),
-  async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const { phone_number } = req.params;
-    const db = await pool.getConnection();
-
+  handleValidationErrors,
+  async (req, res, next) => {
     try {
-      const [result] = await db.execute(
-        `
-        SELECT
-          u.is_active,
-          t.id as trip_id,
-          t.event_name,
-          t.started_at,
-          t.total_amount,
-          t.currency,
-          COUNT(tr.id) as transaction_count
-        FROM users u
-        LEFT JOIN trips t ON u.current_trip_id = t.id
-        LEFT JOIN transactions tr ON t.id = tr.trip_id
-        WHERE u.phone_number = ?
-        GROUP BY u.id, t.id
-      `,
-        [phone_number]
-      );
-
-      if (result.length === 0) {
+      const { phoneNumber } = req.params;
+      const status = await UserModel.getStatusByPhoneNumber(phoneNumber);
+      if (!status) {
         return res.status(404).json({ error: 'User not found' });
       }
-
-      const status = result[0];
-      res.status(200).json({
-        is_active: Boolean(status.is_active),
-        current_trip: status.trip_id
-          ? (() => {
-              const currency = status.currency || 'IDR';
-              const minor = parseInt(status.total_amount || 0);
-              const major =
-                currency === 'USD' ? Number((minor / 100).toFixed(2)) : minor;
-              return {
-                trip_id: status.trip_id,
-                event_name: status.event_name,
-                started_at: status.started_at,
-                currency,
-                amount: major,
-                display_amount: formatAmountForDisplay(currency, minor),
-                transaction_count: parseInt(status.transaction_count || 0),
-              };
-            })()
-          : null,
-      });
+      res.status(200).json(formatUserStatusResponse(status));
     } catch (err) {
-      logger.error({ err, phone_number }, 'Failed to fetch user status');
-      res.status(500).json({ error: 'Failed to fetch user status' });
-    } finally {
-      db.release();
+      logger.error(
+        { err, phone_number: req.params.phoneNumber },
+        'Failed to fetch user status'
+      );
+      next(err);
     }
   }
 );

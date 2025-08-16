@@ -2,23 +2,26 @@ const pool = require('./db');
 const logger = require('./logger');
 const { generateId } = require('./idGenerator');
 
-/**
- * Job Manager for handling timer-based webhook jobs
- * Manages persistence of job data in database webhook_timers table
- */
+async function withConnection(callback) {
+  let connection;
+  try {
+    connection = await pool.getConnection();
+    return await callback(connection);
+  } catch (error) {
+    logger.error(`Database operation failed: ${error.message}`);
+    throw error;
+  } finally {
+    if (connection) connection.release();
+  }
+}
+
 class JobManager {
   constructor() {
     this.initializeTable();
   }
 
-  /**
-   * Initialize webhook_timers table if it doesn't exist
-   */
   async initializeTable() {
-    let connection;
-    try {
-      connection = await pool.getConnection();
-
+    return withConnection(async connection => {
       await connection.execute(`
         CREATE TABLE IF NOT EXISTS webhook_timers (
           id VARCHAR(12) PRIMARY KEY,
@@ -29,31 +32,17 @@ class JobManager {
           status ENUM('active', 'expired', 'completed') NOT NULL DEFAULT 'active',
           created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
           updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-          INDEX idx_trip_id (trip_id),
+          UNIQUE KEY uq_trip_id_status (trip_id, status),
           INDEX idx_deadline (deadline_timestamp),
-          INDEX idx_status (status),
           INDEX idx_status_deadline (status, deadline_timestamp),
-          INDEX idx_sender_id (sender_id),
           FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE SET NULL
         )
       `);
-    } catch (error) {
-      logger.error(`Failed to initialize timer database: ${error.message}`);
-      // Don't throw - let the app continue even if table creation fails
-    } finally {
-      if (connection) connection.release();
-    }
+    });
   }
 
-  /**
-   * Read all active jobs from database
-   * @returns {Promise<Array>} Array of job objects
-   */
   async readJobs() {
-    let connection;
-    try {
-      connection = await pool.getConnection();
-
+    return withConnection(async connection => {
       const [rows] = await connection.execute(`
         SELECT wt.id, wt.trip_id as tripId, wt.webhook_url as webhookUrl,
                wt.sender_id as senderId, wt.deadline_timestamp as deadline,
@@ -64,165 +53,70 @@ class JobManager {
         WHERE wt.status = 'active'
         ORDER BY wt.deadline_timestamp ASC
       `);
-
-      const jobs = rows.map(row => ({
+      return rows.map(row => ({
         ...row,
-        deadline: parseInt(row.deadline),
-        createdAt: row.createdAt.toISOString(),
-        updatedAt: row.updatedAt.toISOString(),
+        deadline: parseInt(row.deadline, 10),
       }));
-
-      return jobs;
-    } catch (error) {
-      logger.error(`Failed to read timer jobs: ${error.message}`);
-      throw error;
-    } finally {
-      if (connection) connection.release();
-    }
+    });
   }
 
-  /**
-   * Add or update a job for a tripId
-   * If tripId already exists, updates the deadline (timer restart)
-   * @param {string|number} tripId - Trip identifier
-   * @param {string} webhookUrl - Webhook URL to call when timer expires
-   * @param {string|null} senderId - User ID who created the timer
-   * @param {number} durationMs - Duration in milliseconds (default: 15 minutes)
-   * @returns {Promise<Object>} Job object that was added/updated
-   */
   async addOrUpdateJob(
     tripId,
     webhookUrl,
     senderId = null,
     durationMs = 15 * 60 * 1000
   ) {
-    let connection;
-    try {
-      connection = await pool.getConnection();
-      await connection.beginTransaction();
+    return withConnection(async connection => {
+      const deadline = Date.now() + durationMs;
+      const tripIdStr = String(tripId);
+      const jobId = generateId(12);
 
-      const deadline = Date.now() + durationMs; // Use provided duration
-      const tripIdStr = tripId.toString();
-
-      // Check if job already exists
-      const [existing] = await connection.execute(
-        `SELECT id, created_at, sender_id FROM webhook_timers WHERE trip_id = ? AND status = 'active'`,
-        [tripIdStr]
+      await connection.execute(
+        `
+        INSERT INTO webhook_timers (id, trip_id, webhook_url, sender_id, deadline_timestamp, status)
+        VALUES (?, ?, ?, ?, ?, 'active')
+        ON DUPLICATE KEY UPDATE
+        webhook_url = VALUES(webhook_url),
+        sender_id = VALUES(sender_id),
+        deadline_timestamp = VALUES(deadline_timestamp),
+        updated_at = NOW()
+      `,
+        [jobId, tripIdStr, webhookUrl, senderId, deadline]
       );
 
-      let jobData;
-
-      if (existing.length > 0) {
-        // Update existing job (timer restart)
-        await connection.execute(
-          `
-          UPDATE webhook_timers
-          SET webhook_url = ?, sender_id = ?, deadline_timestamp = ?, updated_at = NOW()
-          WHERE trip_id = ? AND status = 'active'
-        `,
-          [webhookUrl, senderId, deadline, tripIdStr]
-        );
-
-        jobData = {
-          id: existing[0].id,
-          tripId: tripIdStr,
-          webhookUrl,
-          senderId,
-          deadline,
-          status: 'active',
-          createdAt: existing[0].created_at.toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-
-        logger.info(`Timer restarted for trip ${tripIdStr}`);
-      } else {
-        // Create new job
-        const jobId = generateId(12);
-        const now = new Date();
-
-        await connection.execute(
-          `
-          INSERT INTO webhook_timers
-          (id, trip_id, webhook_url, sender_id, deadline_timestamp, status, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, 'active', NOW(), NOW())
-        `,
-          [jobId, tripIdStr, webhookUrl, senderId, deadline]
-        );
-
-        jobData = {
-          id: jobId,
-          tripId: tripIdStr,
-          webhookUrl,
-          senderId,
-          deadline,
-          status: 'active',
-          createdAt: now.toISOString(),
-          updatedAt: now.toISOString(),
-        };
-
-        logger.info(`Timer started for trip ${tripIdStr}`);
-      }
-
-      await connection.commit();
-      return jobData;
-    } catch (error) {
-      if (connection) await connection.rollback();
-      logger.error(
-        `Failed to create timer for trip ${tripId}: ${error.message}`
+      const [updatedRows] = await connection.execute(
+        'SELECT * FROM webhook_timers WHERE trip_id = ? AND status = ?',
+        [tripIdStr, 'active']
       );
-      throw error;
-    } finally {
-      if (connection) connection.release();
-    }
+      logger.info(`Timer created/updated for trip ${tripIdStr}`);
+      return {
+        ...updatedRows[0],
+        deadline: parseInt(updatedRows[0].deadline_timestamp, 10),
+      };
+    });
   }
 
-  /**
-   * Remove a job by tripId
-   * @param {string|number} tripId - Trip identifier
-   * @returns {Promise<boolean>} True if job was found and removed
-   */
   async removeJob(tripId) {
-    let connection;
-    try {
-      connection = await pool.getConnection();
-
+    return withConnection(async connection => {
       const [result] = await connection.execute(
         `DELETE FROM webhook_timers WHERE trip_id = ? AND status = 'active'`,
-        [tripId.toString()]
+        [String(tripId)]
       );
-
       const removed = result.affectedRows > 0;
-
       if (removed) {
         logger.info(`Timer cancelled for trip ${tripId}`);
       }
-
       return removed;
-    } catch (error) {
-      logger.error(
-        `Failed to cancel timer for trip ${tripId}: ${error.message}`
-      );
-      throw error;
-    } finally {
-      if (connection) connection.release();
-    }
+    });
   }
 
-  /**
-   * Get all jobs that have expired (deadline passed)
-   * @returns {Promise<Array>} Array of expired job objects
-   */
   async getExpiredJobs() {
-    let connection;
-    try {
-      connection = await pool.getConnection();
+    return withConnection(async connection => {
       const now = Date.now();
-
       const [rows] = await connection.execute(
         `
         SELECT wt.id, wt.trip_id as tripId, wt.webhook_url as webhookUrl,
                wt.sender_id as senderId, wt.deadline_timestamp as deadline,
-               wt.status, wt.created_at as createdAt, wt.updated_at as updatedAt,
                u.phone_number as phoneNumber
         FROM webhook_timers wt
         LEFT JOIN users u ON wt.sender_id = u.id
@@ -231,82 +125,36 @@ class JobManager {
       `,
         [now]
       );
-
-      const expiredJobs = rows.map(row => ({
+      return rows.map(row => ({
         ...row,
-        deadline: parseInt(row.deadline),
-        createdAt: row.createdAt.toISOString(),
-        updatedAt: row.updatedAt.toISOString(),
+        deadline: parseInt(row.deadline, 10),
       }));
-
-      return expiredJobs;
-    } catch (error) {
-      logger.error(`Failed to check for expired timers: ${error.message}`);
-      throw error;
-    } finally {
-      if (connection) connection.release();
-    }
+    });
   }
 
-  /**
-   * Remove multiple jobs by tripIds (mark as completed)
-   * @param {Array} tripIds - Array of trip identifiers
-   * @returns {Promise<number>} Number of jobs removed
-   */
   async removeJobs(tripIds) {
-    if (tripIds.length === 0) return 0;
-
-    let connection;
-    try {
-      connection = await pool.getConnection();
-
-      const tripIdStrings = tripIds.map(id => id.toString());
-      const placeholders = tripIdStrings.map(() => '?').join(',');
-
+    if (!tripIds || tripIds.length === 0) return 0;
+    return withConnection(async connection => {
+      const placeholders = tripIds.map(() => '?').join(',');
       const [result] = await connection.execute(
         `UPDATE webhook_timers SET status = 'completed', updated_at = NOW()
          WHERE trip_id IN (${placeholders}) AND status = 'active'`,
-        tripIdStrings
+        tripIds.map(String)
       );
-
       const removedCount = result.affectedRows;
-
       if (removedCount > 0) {
         logger.info(`${removedCount} timers completed`);
       }
-
       return removedCount;
-    } catch (error) {
-      logger.error(`Failed to complete multiple timers: ${error.message}`);
-      throw error;
-    } finally {
-      if (connection) connection.release();
-    }
+    });
   }
 
-  /**
-   * Get all active jobs (for debugging/monitoring)
-   * @returns {Promise<Array>} Array of all active job objects
-   */
   async getAllJobs() {
-    try {
-      return await this.readJobs();
-    } catch (error) {
-      logger.error(`Failed to get timer jobs: ${error.message}`);
-      throw error;
-    }
+    return this.readJobs();
   }
 
-  /**
-   * Get job by tripId
-   * @param {string|number} tripId - Trip identifier
-   * @returns {Promise<Object|null>} Job object or null if not found
-   */
   async getJobByTripId(tripId) {
-    let connection;
-    try {
-      connection = await pool.getConnection();
-
+    return withConnection(async connection => {
       const [rows] = await connection.execute(
         `
         SELECT wt.id, wt.trip_id as tripId, wt.webhook_url as webhookUrl,
@@ -318,30 +166,12 @@ class JobManager {
         WHERE wt.trip_id = ? AND wt.status = 'active'
         LIMIT 1
       `,
-        [tripId.toString()]
+        [String(tripId)]
       );
-
-      if (rows.length === 0) {
-        return null;
-      }
-
-      const row = rows[0];
-      const job = {
-        ...row,
-        deadline: parseInt(row.deadline),
-        createdAt: row.createdAt.toISOString(),
-        updatedAt: row.updatedAt.toISOString(),
-      };
-
-      return job;
-    } catch (error) {
-      logger.error(`Failed to get timer for trip ${tripId}: ${error.message}`);
-      throw error;
-    } finally {
-      if (connection) connection.release();
-    }
+      if (rows.length === 0) return null;
+      return { ...rows[0], deadline: parseInt(rows[0].deadline_timestamp, 10) };
+    });
   }
 }
 
-// Export singleton instance
 module.exports = new JobManager();

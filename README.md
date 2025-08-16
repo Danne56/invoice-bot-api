@@ -37,39 +37,39 @@ This API abstracts database operations away from n8n workflows by providing a se
 
 1. **Clone and configure the repository:**
 
-    ```bash
-    git clone <repository-url>
-    cd whatsapp-trip-expense-bot-api
-    cp .env.example .env
-    ```
+   ```bash
+   git clone <repository-url>
+   cd whatsapp-trip-expense-bot-api
+   cp .env.example .env
+   ```
 
 2. **Set up environment variables:**
-    Update the `.env` file with your database credentials and application settings.
+   Update the `.env` file with your database credentials and application settings.
 
-    ```env
-    # .env
-    DB_HOST=localhost
-    DB_USER=trip_expense_user
-    DB_PASSWORD=your_secure_password
-    DB_NAME=trip_expense_db
-    API_KEY=your-super-secret-api-key
-    PORT=5000
-    ```
+   ```env
+   # .env
+   DB_HOST=localhost
+   DB_USER=trip_expense_user
+   DB_PASSWORD=your_secure_password
+   DB_NAME=trip_expense_db
+   API_KEY=your-super-secret-api-key
+   PORT=5000
+   ```
 
 3. **Initialize the database:**
-    Ensure the database and user are created, then execute the setup script.
+   Ensure the database and user are created, then execute the setup script.
 
-    ```bash
-    npm run db:setup
-    ```
+   ```bash
+   npm run db:setup
+   ```
 
 4. **Install dependencies and run the server:**
 
-    ```bash
-    npm install
-    npm run dev  # For development with live reloading
-    npm start    # For production
-    ```
+   ```bash
+   npm install
+   npm run dev  # For development with live reloading
+   npm start    # For production
+   ```
 
 The API will be accessible at `http://localhost:5000`.
 

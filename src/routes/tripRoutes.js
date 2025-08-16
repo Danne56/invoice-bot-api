@@ -1,33 +1,20 @@
 const express = require('express');
 const { param, query, body, validationResult } = require('express-validator');
-const pool = require('../utils/db');
+const TripModel = require('../models/tripModel');
 const logger = require('../utils/logger');
-const { generateId } = require('../utils/idGenerator');
+const { formatAmountForDisplay, toMajor } = require('../utils/currency');
 
 const router = express.Router();
 
-function formatAmountForDisplay(currency, minorAmount) {
-  const major =
-    currency === 'USD' ? Number((minorAmount / 100).toFixed(2)) : minorAmount;
-  const symbol = currency === 'USD' ? '$' : 'Rp';
-
-  if (currency === 'USD') {
-    const formatted = major.toLocaleString('en-US', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    });
-    return `${symbol} ${formatted}`;
-  } else {
-    // IDR: Use Indonesian format with periods as thousand separators
-    const formatted = major.toLocaleString('id-ID').replace(/,/g, '.');
-    return `${symbol}${formatted}`;
+const handleValidationErrors = (req, res, next) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    logger.warn({ errors: errors.array(), reqBody: req.body });
+    return res.status(400).json({ errors: errors.array() });
   }
-}
+  next();
+};
 
-/**
- * POST /api/trips
- * Create/start a new trip (single active per phone_number)
- */
 router.post(
   '/',
   body('phone_number').isMobilePhone('any').withMessage('Invalid phone number'),
@@ -39,272 +26,149 @@ router.post(
     .optional()
     .isIn(['IDR', 'USD'])
     .withMessage('Currency must be IDR or USD'),
-  async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const { phone_number, event_name, currency = 'IDR' } = req.body;
-    const tripId = generateId(12);
-    const db = await pool.getConnection();
+  handleValidationErrors,
+  async (req, res, next) => {
     try {
-      await db.beginTransaction();
+      const { phone_number, event_name, currency } = req.body;
 
-      // Ensure no active trip exists
-      const [active] = await db.execute(
-        `SELECT id FROM trips WHERE phone_number = ? AND status = 'active' LIMIT 1`,
-        [phone_number]
-      );
-      if (active.length > 0) {
-        await db.rollback();
+      const activeTrip = await TripModel.findActiveByPhoneNumber(phone_number);
+      if (activeTrip) {
         return res.status(400).json({
           error: 'Active trip already exists',
-          active_trip_id: active[0].id,
+          active_trip_id: activeTrip.id,
         });
       }
 
-      // Check if user exists (don't create)
-      const [users] = await db.execute(
-        `SELECT id FROM users WHERE phone_number = ?`,
-        [phone_number]
+      const newTrip = await TripModel.create(
+        phone_number,
+        event_name,
+        currency
       );
-
-      if (users.length === 0) {
-        await db.rollback();
+      logger.info({ ...newTrip }, 'Trip started');
+      res.status(201).json({
+        success: true,
+        ...newTrip,
+        message: `Trip '${newTrip.event_name}' started (currency: ${newTrip.currency})`,
+      });
+    } catch (err) {
+      if (err.message === 'User not found') {
         return res.status(404).json({
           error: 'User not found',
           message: 'User must be created first before starting a trip',
-          phone_number,
         });
       }
-
-      const userId = users[0].id;
-
-      // Mark user as active
-      await db.execute(
-        `UPDATE users SET is_active = 1, updated_at = NOW() WHERE id = ?`,
-        [userId]
-      );
-
-      // Create trip
-      await db.execute(
-        `INSERT INTO trips (id, phone_number, event_name, currency, started_at, status, total_amount)
-         VALUES (?, ?, ?, ?, NOW(), 'active', 0)`,
-        [tripId, phone_number, event_name, currency]
-      );
-
-      // Now update user's current_trip_id after trip is created
-      await db.execute(
-        `UPDATE users SET current_trip_id = ?, updated_at = NOW() WHERE id = ?`,
-        [tripId, userId]
-      );
-
-      await db.commit();
-      logger.info(
-        { tripId, userId, phone_number, event_name, currency },
-        'Trip started'
-      );
-      return res.status(201).json({
-        success: true,
-        trip_id: tripId,
-        user_id: userId,
-        currency,
-        event_name,
-        message: `Trip '${event_name}' started (currency: ${currency})`,
-      });
-    } catch (err) {
-      await db.rollback();
       logger.error({ err, reqBody: req.body }, 'Failed to start trip');
-      return res.status(500).json({ error: 'Failed to start trip' });
-    } finally {
-      db.release();
+      next(err);
     }
   }
 );
 
-/**
- * POST /api/trips/:trip_id/stop
- * Stop a trip and finalize totals
- */
 router.post(
-  '/:trip_id/stop',
-  param('trip_id')
+  '/:tripId/stop',
+  param('tripId')
     .isString()
     .isLength({ min: 10, max: 12 })
     .withMessage('Invalid trip ID'),
-  async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const { trip_id } = req.params;
-    const db = await pool.getConnection();
+  handleValidationErrors,
+  async (req, res, next) => {
     try {
-      await db.beginTransaction();
-      const [trips] = await db.execute(
-        `SELECT id, phone_number, event_name, status, currency FROM trips WHERE id = ? FOR UPDATE`,
-        [trip_id]
+      const { tripId } = req.params;
+      const stoppedTrip = await TripModel.stop(tripId);
+      const currency = stoppedTrip.currency || 'IDR';
+      const displayAmount = formatAmountForDisplay(
+        currency,
+        stoppedTrip.total_amount
       );
-      if (trips.length === 0) {
-        await db.rollback();
+
+      logger.info(
+        {
+          trip_id: stoppedTrip.id,
+          totalMinor: stoppedTrip.total_amount,
+          currency,
+        },
+        'Trip stopped'
+      );
+      res.status(200).json({
+        success: true,
+        trip_id: stoppedTrip.id,
+        event_name: stoppedTrip.event_name,
+        currency,
+        amount: toMajor(currency, stoppedTrip.total_amount),
+        display_amount: displayAmount,
+        message: `Trip '${stoppedTrip.event_name}' completed with total expense: ${displayAmount}`,
+      });
+    } catch (err) {
+      if (err.message === 'Trip not found') {
         return res.status(404).json({ error: 'Trip not found' });
       }
-      const trip = trips[0];
-      if (trip.status !== 'active') {
-        await db.rollback();
+      if (err.message === 'Trip already completed') {
         return res.status(400).json({ error: 'Trip already completed' });
       }
-
-      const [sumRows] = await db.execute(
-        `SELECT COALESCE(SUM(total_amount),0) as total FROM transactions WHERE trip_id = ?`,
-        [trip_id]
-      );
-      const totalMinor = parseInt(sumRows[0].total);
-
-      await db.execute(
-        `UPDATE trips SET status='completed', ended_at = NOW(), total_amount = ? WHERE id = ?`,
-        [totalMinor, trip_id]
-      );
-
-      await db.execute(
-        `UPDATE users SET is_active = 0, current_trip_id = NULL, updated_at = NOW() WHERE phone_number = ?`,
-        [trip.phone_number]
-      );
-
-      await db.commit();
-      const currency = trip.currency || 'IDR';
-      const totalMajor =
-        currency === 'USD' ? Number((totalMinor / 100).toFixed(2)) : totalMinor;
-      const displayAmount = formatAmountForDisplay(currency, totalMinor);
-      logger.info({ trip_id, totalMinor, currency }, 'Trip stopped');
-      return res.status(200).json({
-        success: true,
-        trip_id,
-        event_name: trip.event_name,
-        currency,
-        amount: totalMajor,
-        display_amount: displayAmount,
-        message: `Trip '${trip.event_name}' completed with total expense: ${displayAmount}`,
-      });
-    } catch (err) {
-      await db.rollback();
-      logger.error({ err, trip_id }, 'Failed to stop trip');
-      return res.status(500).json({ error: 'Failed to stop trip' });
-    } finally {
-      db.release();
+      logger.error({ err, trip_id: req.params.tripId }, 'Failed to stop trip');
+      next(err);
     }
   }
 );
 
-/**
- * GET /api/trips/:trip_id
- * Get trip details with transactions
- */
 router.get(
-  '/:trip_id',
-  param('trip_id')
+  '/:tripId',
+  param('tripId')
     .isString()
     .isLength({ min: 10, max: 12 })
     .withMessage('Invalid trip ID'),
-  async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const { trip_id } = req.params;
-    const db = await pool.getConnection();
-
+  handleValidationErrors,
+  async (req, res, next) => {
     try {
-      // Get trip details
-      const [trips] = await db.execute(
-        `
-        SELECT * FROM trips WHERE id = ?
-      `,
-        [trip_id]
-      );
+      const { tripId } = req.params;
+      const trip = await TripModel.findById(tripId);
 
-      if (trips.length === 0) {
+      if (!trip) {
         return res.status(404).json({ error: 'Trip not found' });
       }
 
-      // Get transactions for this trip
-      const [transactions] = await db.execute(
-        `
-        SELECT * FROM transactions
-        WHERE trip_id = ?
-        ORDER BY recorded_at DESC
-      `,
-        [trip_id]
-      );
-
-      const trip = trips[0];
       const tripCurrency = trip.currency || 'IDR';
-      // Convert trip total to major by trip currency
-      trip.amount =
-        tripCurrency === 'USD'
-          ? Number(((trip.total_amount || 0) / 100).toFixed(2))
-          : parseInt(trip.total_amount || 0);
+      trip.amount = toMajor(tripCurrency, trip.total_amount || 0);
       trip.display_amount = formatAmountForDisplay(
         tripCurrency,
-        parseInt(trip.total_amount || 0)
+        trip.total_amount || 0
       );
-      trip.currency = tripCurrency;
 
-      // Map transactions with currency and dual amounts
-      trip.transactions = transactions.map(t => {
+      trip.transactions = trip.transactions.map(t => {
         const currency = t.currency || tripCurrency;
-        const row = {
+        const formatted = {
           ...t,
           currency,
-          amount: t.total_amount
-            ? currency === 'USD'
-              ? Number((parseInt(t.total_amount) / 100).toFixed(2))
-              : parseInt(t.total_amount)
-            : 0,
-          display_amount: t.total_amount
-            ? formatAmountForDisplay(currency, parseInt(t.total_amount))
-            : formatAmountForDisplay(currency, 0),
+          amount: toMajor(currency, t.total_amount || 0),
+          display_amount: formatAmountForDisplay(
+            currency,
+            t.total_amount || 0
+          ),
         };
-        if (t.subtotal !== null && t.subtotal !== undefined) {
-          row.subtotal_amount =
-            currency === 'USD'
-              ? Number((parseInt(t.subtotal) / 100).toFixed(2))
-              : parseInt(t.subtotal);
-          row.subtotal_display = formatAmountForDisplay(
+        if (t.subtotal !== null) {
+          formatted.subtotal_amount = toMajor(currency, t.subtotal);
+          formatted.subtotal_display = formatAmountForDisplay(
             currency,
-            parseInt(t.subtotal)
+            t.subtotal
           );
         }
-        if (t.tax_amount !== null && t.tax_amount !== undefined) {
-          row.tax_amount =
-            currency === 'USD'
-              ? Number((parseInt(t.tax_amount) / 100).toFixed(2))
-              : parseInt(t.tax_amount);
-          row.tax_display = formatAmountForDisplay(
+        if (t.tax_amount !== null) {
+          formatted.tax_amount = toMajor(currency, t.tax_amount);
+          formatted.tax_display = formatAmountForDisplay(
             currency,
-            parseInt(t.tax_amount)
+            t.tax_amount
           );
         }
-        return row;
+        return formatted;
       });
 
       res.status(200).json({ data: trip });
     } catch (err) {
-      logger.error({ err, trip_id }, 'Failed to fetch trip');
-      res.status(500).json({ error: 'Failed to fetch trip' });
-    } finally {
-      db.release();
+      logger.error({ err, trip_id: req.params.tripId }, 'Failed to fetch trip');
+      next(err);
     }
   }
 );
 
-/**
- * GET /api/trips
- * Get trips for a user with optional filtering
- */
 router.get(
   '/',
   query('phone_number')
@@ -322,138 +186,75 @@ router.get(
     .optional()
     .isInt({ min: 0 })
     .withMessage('Offset must be non-negative'),
-  async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const { phone_number, status, limit = 10, offset = 0 } = req.query;
-    const db = await pool.getConnection();
-
+  handleValidationErrors,
+  async (req, res, next) => {
     try {
-      let query = `
-        SELECT t.*, COUNT(tr.id) as transaction_count
-        FROM trips t
-        LEFT JOIN transactions tr ON t.id = tr.trip_id
-        WHERE t.phone_number = ?
-      `;
-      const params = [phone_number];
+      const { phone_number, status, limit, offset } = req.query;
+      const trips = await TripModel.findAllByUser(phone_number, {
+        status,
+        limit,
+        offset,
+      });
 
-      if (status) {
-        query += ' AND t.status = ?';
-        params.push(status);
-      }
-
-      query += `
-        GROUP BY t.id
-        ORDER BY t.started_at DESC
-        LIMIT ? OFFSET ?
-      `;
-      params.push(parseInt(limit), parseInt(offset));
-
-      const [trips] = await db.execute(query, params);
-
-      // Convert totals for each trip using trip currency
-      trips.forEach(trip => {
+      const data = trips.map(trip => {
         const currency = trip.currency || 'IDR';
-        trip.amount =
-          currency === 'USD'
-            ? Number(((trip.total_amount || 0) / 100).toFixed(2))
-            : parseInt(trip.total_amount || 0);
-        trip.display_amount = formatAmountForDisplay(
-          currency,
-          parseInt(trip.total_amount || 0)
-        );
-        trip.currency = currency;
-        trip.transaction_count = parseInt(trip.transaction_count);
+        return {
+          ...trip,
+          amount: toMajor(currency, trip.total_amount || 0),
+          display_amount: formatAmountForDisplay(
+            currency,
+            trip.total_amount || 0
+          ),
+          transaction_count: parseInt(trip.transaction_count, 10),
+        };
       });
 
       res.status(200).json({
-        data: trips,
+        data,
         pagination: {
-          limit: parseInt(limit),
-          offset: parseInt(offset),
+          limit: parseInt(limit || 10, 10),
+          offset: parseInt(offset || 0, 10),
         },
       });
     } catch (err) {
-      logger.error({ err, phone_number }, 'Failed to fetch trips');
-      res.status(500).json({ error: 'Failed to fetch trips' });
-    } finally {
-      db.release();
+      logger.error(
+        { err, phone_number: req.query.phone_number },
+        'Failed to fetch trips'
+      );
+      next(err);
     }
   }
 );
 
-/**
- * GET /api/trips/:trip_id/summary
- * Get trip summary with expense breakdown
- */
 router.get(
-  '/:trip_id/summary',
-  param('trip_id')
+  '/:tripId/summary',
+  param('tripId')
     .isString()
     .isLength({ min: 10, max: 12 })
     .withMessage('Invalid trip ID'),
-  async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const { trip_id } = req.params;
-    const db = await pool.getConnection();
-
+  handleValidationErrors,
+  async (req, res, next) => {
     try {
-      // Get trip basic info
-      const [trips] = await db.execute(
-        `
-        SELECT id, event_name, phone_number, started_at, ended_at, total_amount, status
-        FROM trips WHERE id = ?
-      `,
-        [trip_id]
-      );
+      const { tripId } = req.params;
+      const summary = await TripModel.getSummary(tripId);
 
-      if (trips.length === 0) {
+      if (!summary) {
         return res.status(404).json({ error: 'Trip not found' });
       }
 
-      // Get transaction summary
-      const [summary] = await db.execute(
-        `
-        SELECT
-          COUNT(*) as total_transactions,
-          COALESCE(SUM(total_amount), 0) as calculated_total,
-          AVG(total_amount) as average_expense,
-          MIN(total_amount) as min_expense,
-          MAX(total_amount) as max_expense,
-          COUNT(CASE WHEN merchant IS NOT NULL THEN 1 END) as transactions_with_merchant
-        FROM transactions
-        WHERE trip_id = ?
-      `,
-        [trip_id]
-      );
+      const { trip_info, expense_summary, distinct_currencies } = summary;
+      const tripCurrency = trip_info.currency || 'IDR';
 
-      const trip = trips[0];
-      const stats = summary[0];
-
-      // Enforce single-currency for summary
-      const [curRows] = await db.execute(
-        `SELECT DISTINCT currency FROM transactions WHERE trip_id = ?`,
-        [trip_id]
-      );
-      const distinctCurrencies = curRows.map(r => r.currency).filter(Boolean);
-      const tripCurrency = trip.currency || 'IDR';
       if (
-        distinctCurrencies.length > 1 ||
-        (distinctCurrencies.length === 1 &&
-          distinctCurrencies[0] !== tripCurrency)
+        distinct_currencies.length > 1 ||
+        (distinct_currencies.length === 1 &&
+          distinct_currencies[0] !== tripCurrency)
       ) {
         return res.status(400).json({
           error:
             'Mixed currencies detected in this trip. Single-currency per trip is enforced.',
           details: {
-            currencies: distinctCurrencies,
+            currencies: distinct_currencies,
             trip_currency: tripCurrency,
           },
         });
@@ -461,66 +262,59 @@ router.get(
 
       res.status(200).json({
         trip_info: {
-          id: trip.id,
-          event_name: trip.event_name,
-          phone_number: trip.phone_number,
-          started_at: trip.started_at,
-          ended_at: trip.ended_at,
-          status: trip.status,
-          currency: tripCurrency,
-          recorded_total_amount:
-            tripCurrency === 'USD'
-              ? Number((parseInt(trip.total_amount) / 100).toFixed(2))
-              : parseInt(trip.total_amount),
+          ...trip_info,
+          recorded_total_amount: toMajor(tripCurrency, trip_info.total_amount),
           recorded_total_display: formatAmountForDisplay(
             tripCurrency,
-            parseInt(trip.total_amount)
+            trip_info.total_amount
           ),
         },
         expense_summary: {
-          total_transactions: parseInt(stats.total_transactions),
-          calculated_total_amount:
-            tripCurrency === 'USD'
-              ? Number((parseInt(stats.calculated_total) / 100).toFixed(2))
-              : parseInt(stats.calculated_total),
+          total_transactions: parseInt(expense_summary.total_transactions, 10),
+          calculated_total_amount: toMajor(
+            tripCurrency,
+            expense_summary.calculated_total
+          ),
           calculated_total_display: formatAmountForDisplay(
             tripCurrency,
-            parseInt(stats.calculated_total)
+            expense_summary.calculated_total
           ),
-          average_expense_amount:
-            tripCurrency === 'USD'
-              ? Number((parseInt(stats.average_expense || 0) / 100).toFixed(2))
-              : parseInt(stats.average_expense || 0),
+          average_expense_amount: toMajor(
+            tripCurrency,
+            expense_summary.average_expense || 0
+          ),
           average_expense_display: formatAmountForDisplay(
             tripCurrency,
-            parseInt(stats.average_expense || 0)
+            expense_summary.average_expense || 0
           ),
-          min_expense_amount:
-            tripCurrency === 'USD'
-              ? Number((parseInt(stats.min_expense || 0) / 100).toFixed(2))
-              : parseInt(stats.min_expense || 0),
+          min_expense_amount: toMajor(
+            tripCurrency,
+            expense_summary.min_expense || 0
+          ),
           min_expense_display: formatAmountForDisplay(
             tripCurrency,
-            parseInt(stats.min_expense || 0)
+            expense_summary.min_expense || 0
           ),
-          max_expense_amount:
-            tripCurrency === 'USD'
-              ? Number((parseInt(stats.max_expense || 0) / 100).toFixed(2))
-              : parseInt(stats.max_expense || 0),
+          max_expense_amount: toMajor(
+            tripCurrency,
+            expense_summary.max_expense || 0
+          ),
           max_expense_display: formatAmountForDisplay(
             tripCurrency,
-            parseInt(stats.max_expense || 0)
+            expense_summary.max_expense || 0
           ),
           transactions_with_merchant: parseInt(
-            stats.transactions_with_merchant
+            expense_summary.transactions_with_merchant,
+            10
           ),
         },
       });
     } catch (err) {
-      logger.error({ err, trip_id }, 'Failed to fetch trip summary');
-      res.status(500).json({ error: 'Failed to fetch trip summary' });
-    } finally {
-      db.release();
+      logger.error(
+        { err, trip_id: req.params.tripId },
+        'Failed to fetch trip summary'
+      );
+      next(err);
     }
   }
 );

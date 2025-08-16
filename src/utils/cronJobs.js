@@ -162,12 +162,8 @@ class CronJobManager {
         `Failed to send timer notification for trip ${tripId}: ${error.message}`
       );
 
-      return {
-        tripId,
-        success: false,
-        error: error.message,
-        statusCode: error.response?.status,
-      };
+      // Re-throw the error to be caught by Promise.allSettled
+      throw error;
     }
   }
 
