@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
     current_trip_id VARCHAR(12) NULL,  -- If trip also uses custom ID
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (current_trip_id) REFERENCES trips(id) ON DELETE SET NULL,
     INDEX idx_phone_number (phone_number),
     INDEX idx_current_trip (current_trip_id)
 );
@@ -48,10 +49,6 @@ CREATE TABLE IF NOT EXISTS transactions (
     INDEX idx_total_amount (total_amount),
     INDEX idx_tx_currency (currency)
 );
-
--- Add foreign key constraint for current_trip_id in users table
-ALTER TABLE users
-ADD FOREIGN KEY (current_trip_id) REFERENCES trips(id) ON DELETE SET NULL;
 
 -- Webhook timers table for timer-based webhook system
 CREATE TABLE IF NOT EXISTS webhook_timers (

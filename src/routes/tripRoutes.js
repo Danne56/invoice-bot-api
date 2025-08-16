@@ -64,32 +64,40 @@ router.post(
         });
       }
 
-      // Ensure user exists (create if not)
+      // Check if user exists (don't create)
       const [users] = await db.execute(
         `SELECT id FROM users WHERE phone_number = ?`,
         [phone_number]
       );
-      let userId;
+
       if (users.length === 0) {
-        userId = generateId(12);
-        await db.execute(
-          `INSERT INTO users (id, phone_number, is_active, current_trip_id, created_at, updated_at)
-           VALUES (?, ?, 1, ?, NOW(), NOW())`,
-          [userId, phone_number, tripId]
-        );
-      } else {
-        userId = users[0].id;
-        await db.execute(
-          `UPDATE users SET is_active = 1, current_trip_id = ?, updated_at = NOW() WHERE id = ?`,
-          [tripId, userId]
-        );
+        await db.rollback();
+        return res.status(404).json({
+          error: 'User not found',
+          message: 'User must be created first before starting a trip',
+          phone_number,
+        });
       }
+
+      const userId = users[0].id;
+
+      // Mark user as active
+      await db.execute(
+        `UPDATE users SET is_active = 1, updated_at = NOW() WHERE id = ?`,
+        [userId]
+      );
 
       // Create trip
       await db.execute(
         `INSERT INTO trips (id, phone_number, event_name, currency, started_at, status, total_amount)
          VALUES (?, ?, ?, ?, NOW(), 'active', 0)`,
         [tripId, phone_number, event_name, currency]
+      );
+
+      // Now update user's current_trip_id after trip is created
+      await db.execute(
+        `UPDATE users SET current_trip_id = ?, updated_at = NOW() WHERE id = ?`,
+        [tripId, userId]
       );
 
       await db.commit();
