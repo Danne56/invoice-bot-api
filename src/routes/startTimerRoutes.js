@@ -4,12 +4,7 @@ const logger = require('../utils/logger');
 const jobManager = require('../utils/jobManager');
 const cronJobManager = require('../utils/cronJobs');
 const pool = require('../utils/db');
-const {
-  parseDuration,
-  formatDuration,
-  formatRelativeTime,
-  getTimerStatus,
-} = require('../utils/timerHelpers');
+const { parseDuration, formatDuration } = require('../utils/timerHelpers');
 
 const router = express.Router();
 
@@ -59,11 +54,9 @@ router.post(
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      logger.warn({
-        message: 'Timer start request validation failed',
-        errors: errors.array(),
-        body: req.body,
-      });
+      logger.warn(
+        `Timer validation failed for trip ${req.body.tripId || 'unknown'}`
+      );
       return res.status(400).json({
         success: false,
         error: 'Validation failed',
@@ -75,7 +68,6 @@ router.post(
 
     try {
       let senderId = null;
-      let senderPhoneNumber = null;
 
       // Parse duration or use default 15 minutes
       let durationMs;
@@ -100,17 +92,8 @@ router.post(
 
           if (users.length > 0) {
             senderId = users[0].id;
-            senderPhoneNumber = users[0].phone_number;
-            logger.debug({
-              message: 'User found for phone number',
-              phoneNumber,
-              senderId,
-            });
           } else {
-            logger.warn({
-              message: 'User not found for phone number',
-              phoneNumber,
-            });
+            logger.warn(`User not found for phone number ${phoneNumber}`);
             // Continue without sender ID - we'll still create the timer
           }
         } finally {
@@ -118,14 +101,9 @@ router.post(
         }
       }
 
-      // Ensure cron job is running
       const cronStatus = cronJobManager.getStatus();
       if (!cronStatus.running) {
         cronJobManager.start();
-        logger.info({
-          message: 'Cron job started due to timer request',
-          tripId,
-        });
       }
 
       // Check if job already exists for this tripId
@@ -141,46 +119,24 @@ router.post(
       );
 
       const timeUntilExpiry = job.deadline - Date.now();
-      const timerStatus = getTimerStatus(timeUntilExpiry);
 
       const responseMessage = isRestart
-        ? `Timer restarted! Will call webhook in ${formatDuration(timeUntilExpiry)}`
-        : `Timer started! Will call webhook in ${formatDuration(timeUntilExpiry)}`;
+        ? `Timer restarted! Will expire in ${formatDuration(timeUntilExpiry)}`
+        : `Timer started! Will expire in ${formatDuration(timeUntilExpiry)}`;
 
-      logger.info({
-        message: isRestart ? 'Timer restarted' : 'Timer started',
-        tripId,
-        webhookUrl,
-        deadline: job.deadline,
-        isRestart,
-        timeUntilExpiry,
-      });
+      logger.info(responseMessage.replace('!', '') + ` for trip ${tripId}`);
 
       res.status(200).json({
         success: true,
         tripId: job.tripId,
-        webhookUrl: job.webhookUrl,
-        senderId: job.senderId,
-        phoneNumber: senderPhoneNumber,
-        duration: duration || '15m',
-        durationMs,
-        deadline: job.deadline,
-        deadlineISO: new Date(job.deadline).toISOString(),
-        timeUntilExpiry,
-        timeUntilExpiryFormatted: formatDuration(timeUntilExpiry),
-        expiresIn: formatRelativeTime(timeUntilExpiry, false),
-        timerStatus: timerStatus.status,
-        statusDescription: timerStatus.description,
-        isRestart,
         message: responseMessage,
+        expiresIn: formatDuration(timeUntilExpiry),
+        expiresAt: new Date(job.deadline).toISOString(),
       });
     } catch (error) {
-      logger.error({
-        message: 'Failed to start/restart timer',
-        error: error.message,
-        tripId,
-        webhookUrl,
-      });
+      logger.error(
+        `Failed to start timer for trip ${tripId}: ${error.message}`
+      );
 
       res.status(500).json({
         success: false,

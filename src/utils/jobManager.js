@@ -37,15 +37,8 @@ class JobManager {
           FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE SET NULL
         )
       `);
-
-      logger.debug({
-        message: 'Webhook timers table initialized successfully',
-      });
     } catch (error) {
-      logger.error({
-        message: 'Failed to initialize webhook_timers table',
-        error: error.message,
-      });
+      logger.error(`Failed to initialize timer database: ${error.message}`);
       // Don't throw - let the app continue even if table creation fails
     } finally {
       if (connection) connection.release();
@@ -79,17 +72,9 @@ class JobManager {
         updatedAt: row.updatedAt.toISOString(),
       }));
 
-      logger.debug({
-        message: 'Active jobs retrieved from database',
-        count: jobs.length,
-      });
-
       return jobs;
     } catch (error) {
-      logger.error({
-        message: 'Failed to read jobs from database',
-        error: error.message,
-      });
+      logger.error(`Failed to read timer jobs: ${error.message}`);
       throw error;
     } finally {
       if (connection) connection.release();
@@ -149,13 +134,7 @@ class JobManager {
           updatedAt: new Date().toISOString(),
         };
 
-        logger.info({
-          message: 'Job updated - timer restarted',
-          tripId: tripIdStr,
-          webhookUrl,
-          senderId,
-          deadline,
-        });
+        logger.info(`Timer restarted for trip ${tripIdStr}`);
       } else {
         // Create new job
         const jobId = generateId(12);
@@ -181,26 +160,16 @@ class JobManager {
           updatedAt: now.toISOString(),
         };
 
-        logger.info({
-          message: 'New job added',
-          tripId: tripIdStr,
-          webhookUrl,
-          senderId,
-          deadline,
-          jobId,
-        });
+        logger.info(`Timer started for trip ${tripIdStr}`);
       }
 
       await connection.commit();
       return jobData;
     } catch (error) {
       if (connection) await connection.rollback();
-      logger.error({
-        message: 'Failed to add/update job',
-        error: error.message,
-        tripId,
-        webhookUrl,
-      });
+      logger.error(
+        `Failed to create timer for trip ${tripId}: ${error.message}`
+      );
       throw error;
     } finally {
       if (connection) connection.release();
@@ -224,21 +193,15 @@ class JobManager {
 
       const removed = result.affectedRows > 0;
 
-      logger.info({
-        message: removed
-          ? 'Job removed successfully'
-          : 'No job found to remove',
-        tripId,
-        removed,
-      });
+      if (removed) {
+        logger.info(`Timer cancelled for trip ${tripId}`);
+      }
 
       return removed;
     } catch (error) {
-      logger.error({
-        message: 'Failed to remove job',
-        error: error.message,
-        tripId,
-      });
+      logger.error(
+        `Failed to cancel timer for trip ${tripId}: ${error.message}`
+      );
       throw error;
     } finally {
       if (connection) connection.release();
@@ -276,19 +239,9 @@ class JobManager {
         updatedAt: row.updatedAt.toISOString(),
       }));
 
-      logger.debug({
-        message: 'Checked for expired jobs',
-        totalRows: rows.length,
-        expiredJobs: expiredJobs.length,
-        currentTimestamp: now,
-      });
-
       return expiredJobs;
     } catch (error) {
-      logger.error({
-        message: 'Failed to get expired jobs',
-        error: error.message,
-      });
+      logger.error(`Failed to check for expired timers: ${error.message}`);
       throw error;
     } finally {
       if (connection) connection.release();
@@ -318,20 +271,13 @@ class JobManager {
 
       const removedCount = result.affectedRows;
 
-      logger.info({
-        message: 'Multiple jobs marked as completed',
-        tripIds,
-        removedCount,
-        requestedCount: tripIds.length,
-      });
+      if (removedCount > 0) {
+        logger.info(`${removedCount} timers completed`);
+      }
 
       return removedCount;
     } catch (error) {
-      logger.error({
-        message: 'Failed to remove multiple jobs',
-        error: error.message,
-        tripIds,
-      });
+      logger.error(`Failed to complete multiple timers: ${error.message}`);
       throw error;
     } finally {
       if (connection) connection.release();
@@ -346,10 +292,7 @@ class JobManager {
     try {
       return await this.readJobs();
     } catch (error) {
-      logger.error({
-        message: 'Failed to get all jobs',
-        error: error.message,
-      });
+      logger.error(`Failed to get timer jobs: ${error.message}`);
       throw error;
     }
   }
@@ -379,10 +322,6 @@ class JobManager {
       );
 
       if (rows.length === 0) {
-        logger.debug({
-          message: 'No job found for tripId',
-          tripId,
-        });
         return null;
       }
 
@@ -394,19 +333,9 @@ class JobManager {
         updatedAt: row.updatedAt.toISOString(),
       };
 
-      logger.debug({
-        message: 'Job retrieved by tripId',
-        tripId,
-        jobId: job.id,
-      });
-
       return job;
     } catch (error) {
-      logger.error({
-        message: 'Failed to get job by tripId',
-        error: error.message,
-        tripId,
-      });
+      logger.error(`Failed to get timer for trip ${tripId}: ${error.message}`);
       throw error;
     } finally {
       if (connection) connection.release();
