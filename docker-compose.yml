@@ -3,7 +3,7 @@ networks:
     external: true
     name: docker-bridge
 volumes:
-  mariadb-invoice-data:
+  mariadb-data:
   node_modules:
 
 services:
@@ -24,28 +24,32 @@ services:
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_NAME=${DB_NAME}
     ports:
-      - 5000:5000
+      - 5000
     volumes:
       - .:/app
-      - node_modules:/app/node_modules
     depends_on:
-      - mariadb
+      - db
 
-  mariadb:
-    image: jc21/mariadb-aria:latest
-    container_name: mariadb
+  db:
+    image: mariadb:11.8.3
     restart: unless-stopped
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     environment:
-      - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
-      - MYSQL_DATABASE=${DB_NAME}
-      - MYSQL_USER=${DB_USER}
-      - MYSQL_PASSWORD=${DB_PASSWORD}
+      - MARIADB_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
+      - MARIADB_DATABASE=${DB_NAME}
+      - MARIADB_USER=${DB_USER}
+      - MARIADB_PASSWORD=${DB_PASSWORD}
       - MARIADB_AUTO_UPGRADE="1"
       - TZ='Asia/Jakarta'
     volumes:
-      - mariadb-invoice-data:/var/lib/mysql
+      - mariadb-data:/var/lib/mysql
       - ./src/db/database-setup.sql:/docker-entrypoint-initdb.d/database-setup.sql
-      - ./docker/mariadb/conf.d/my.cnf:/etc/my.cnf.d/my.cnf:ro
+      - ./docker/mariadb/conf.d/my.cnf:/etc/mysql/conf.d/my.cnf:ro
     ports:
-      - 3306:3306
+      - 3306
+    healthcheck:
+      test: ['CMD', 'healthcheck.sh', '--connect', '--innodb_initialized']
+      start_period: 10s
+      interval: 10s
+      timeout: 5s
+      retries: 3
