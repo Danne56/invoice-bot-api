@@ -4,6 +4,52 @@
  */
 
 /**
+ * Parse duration string to milliseconds
+ * @param {string} duration - Duration string like "15s", "30m", "2h", "1d"
+ * @returns {number} Duration in milliseconds
+ */
+function parseDuration(duration) {
+  if (typeof duration !== 'string') {
+    throw new Error('Duration must be a string');
+  }
+
+  // Remove whitespace and convert to lowercase
+  const cleanDuration = duration.trim().toLowerCase();
+
+  // Match pattern: number + unit (s, m, h, d)
+  const match = cleanDuration.match(/^(\d+(?:\.\d+)?)(s|m|h|d)$/);
+
+  if (!match) {
+    throw new Error(
+      'Invalid duration format. Use formats like: 15s, 30m, 2h, 1d'
+    );
+  }
+
+  const value = parseFloat(match[1]);
+  const unit = match[2];
+
+  if (value <= 0) {
+    throw new Error('Duration must be greater than 0');
+  }
+
+  // Convert to milliseconds
+  switch (unit) {
+    case 's': // seconds
+      return Math.floor(value * 1000);
+    case 'm': // minutes
+      return Math.floor(value * 60 * 1000);
+    case 'h': // hours
+      return Math.floor(value * 60 * 60 * 1000);
+    case 'd': // days
+      return Math.floor(value * 24 * 60 * 60 * 1000);
+    default:
+      throw new Error(
+        'Invalid duration unit. Use s (seconds), m (minutes), h (hours), or d (days)'
+      );
+  }
+}
+
+/**
  * Convert milliseconds to human-readable duration
  * @param {number} milliseconds - Time in milliseconds
  * @returns {string} Human-readable duration like "5 minutes 30 seconds"
@@ -159,6 +205,7 @@ function calculateTimerStats(jobs) {
 }
 
 module.exports = {
+  parseDuration,
   formatDuration,
   formatRelativeTime,
   getTimerStatus,

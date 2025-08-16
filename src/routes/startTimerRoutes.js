@@ -5,6 +5,7 @@ const jobManager = require('../utils/jobManager');
 const cronJobManager = require('../utils/cronJobs');
 const pool = require('../utils/db');
 const {
+  parseDuration,
   formatDuration,
   formatRelativeTime,
   getTimerStatus,
@@ -40,6 +41,20 @@ router.post(
       .optional()
       .isMobilePhone('any')
       .withMessage('phoneNumber must be a valid mobile phone number'),
+    body('duration')
+      .optional()
+      .custom(value => {
+        if (value) {
+          try {
+            parseDuration(value);
+            return true;
+          } catch (error) {
+            throw new Error(`Invalid duration format: ${error.message}`);
+          }
+        }
+        return true;
+      })
+      .withMessage('duration must be in format like: 15s, 30m, 2h, 1d'),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -56,11 +71,23 @@ router.post(
       });
     }
 
-    const { tripId, webhookUrl, phoneNumber } = req.body;
+    const { tripId, webhookUrl, phoneNumber, duration } = req.body;
 
     try {
       let senderId = null;
       let senderPhoneNumber = null;
+
+      // Parse duration or use default 15 minutes
+      let durationMs;
+      try {
+        durationMs = duration ? parseDuration(duration) : 15 * 60 * 1000; // Default 15 minutes
+      } catch (error) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid duration',
+          message: error.message,
+        });
+      }
 
       // Look up user by phone number if provided
       if (phoneNumber) {
@@ -106,14 +133,19 @@ router.post(
       const isRestart = !!existingJob;
 
       // Add or update the job (handles restart logic)
-      const job = await jobManager.addOrUpdateJob(tripId, webhookUrl, senderId);
+      const job = await jobManager.addOrUpdateJob(
+        tripId,
+        webhookUrl,
+        senderId,
+        durationMs
+      );
 
       const timeUntilExpiry = job.deadline - Date.now();
       const timerStatus = getTimerStatus(timeUntilExpiry);
 
       const responseMessage = isRestart
-        ? `Timer restarted! Will call webhook in 15 minutes (${formatDuration(timeUntilExpiry)})`
-        : `Timer started! Will call webhook in 15 minutes (${formatDuration(timeUntilExpiry)})`;
+        ? `Timer restarted! Will call webhook in ${formatDuration(timeUntilExpiry)}`
+        : `Timer started! Will call webhook in ${formatDuration(timeUntilExpiry)}`;
 
       logger.info({
         message: isRestart ? 'Timer restarted' : 'Timer started',
@@ -130,6 +162,8 @@ router.post(
         webhookUrl: job.webhookUrl,
         senderId: job.senderId,
         phoneNumber: senderPhoneNumber,
+        duration: duration || '15m',
+        durationMs,
         deadline: job.deadline,
         deadlineISO: new Date(job.deadline).toISOString(),
         timeUntilExpiry,

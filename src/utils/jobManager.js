@@ -102,15 +102,21 @@ class JobManager {
    * @param {string|number} tripId - Trip identifier
    * @param {string} webhookUrl - Webhook URL to call when timer expires
    * @param {string|null} senderId - User ID who created the timer
+   * @param {number} durationMs - Duration in milliseconds (default: 15 minutes)
    * @returns {Promise<Object>} Job object that was added/updated
    */
-  async addOrUpdateJob(tripId, webhookUrl, senderId = null) {
+  async addOrUpdateJob(
+    tripId,
+    webhookUrl,
+    senderId = null,
+    durationMs = 15 * 60 * 1000
+  ) {
     let connection;
     try {
       connection = await pool.getConnection();
       await connection.beginTransaction();
 
-      const deadline = Date.now() + 15 * 60 * 1000; // 15 minutes from now
+      const deadline = Date.now() + durationMs; // Use provided duration
       const tripIdStr = tripId.toString();
 
       // Check if job already exists
