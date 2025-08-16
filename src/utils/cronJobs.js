@@ -129,8 +129,6 @@ class CronJobManager {
     const { tripId, webhookUrl, deadline, phoneNumber } = job;
 
     try {
-      const delay = Date.now() - deadline;
-
       logger.info(`Sending timer notification for trip ${tripId}`);
 
       // Prepare webhook payload
