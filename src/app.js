@@ -12,7 +12,8 @@ const errorHandler = require('./middleware/errorHandler');
 const userRoutes = require('./routes/userRoutes');
 const tripRoutes = require('./routes/tripRoutes');
 const transactionRoutes = require('./routes/transactionRoutes');
-const timerRoutes = require('./routes/timerRoutes');
+const startTimerRoutes = require('./routes/startTimerRoutes');
+const apiTimerRoutes = require('./routes/apiTimerRoutes');
 
 // Initialize timer system
 const cronJobManager = require('./utils/cronJobs');
@@ -40,13 +41,14 @@ app.get('/health', (req, res) => {
 });
 
 // Timer webhook endpoint (no auth required for external system integration)
-app.use('/start-timer', timerRoutes);
+// Only allow POST to start-timer, other timer endpoints require auth
+app.use('/start-timer', startTimerRoutes);
 
 // API Routes (all protected by API key)
 app.use('/api/users', authenticateApiKey, userRoutes);
 app.use('/api/trips', authenticateApiKey, tripRoutes);
 app.use('/api/transactions', authenticateApiKey, transactionRoutes);
-app.use('/api/timer', authenticateApiKey, timerRoutes);
+app.use('/api/timer', authenticateApiKey, apiTimerRoutes);
 
 // 404 Handler
 app.use((req, res) => {

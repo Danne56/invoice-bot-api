@@ -14,12 +14,13 @@ class CronJobManager {
   }
 
   /**
-   * Initialize and start the cron job
-   * Runs every minute to check for expired jobs
+   * Initialize the cron job (runs every minute)
    */
   initialize() {
     if (this.isInitialized) {
-      logger.warn('Cron job already initialized');
+      logger.warn({
+        message: 'Cron job already initialized',
+      });
       return;
     }
 
@@ -30,10 +31,10 @@ class CronJobManager {
         try {
           await this.processExpiredJobs();
         } catch (error) {
-          logger.error(
-            { err: error },
-            'Error processing expired jobs in cron task'
-          );
+          logger.error({
+            message: 'Error processing expired jobs in cron task',
+            error: error.message,
+          });
         }
       },
       {
@@ -42,7 +43,9 @@ class CronJobManager {
     );
 
     this.isInitialized = true;
-    logger.info('Cron job initialized (not started yet)');
+    logger.info({
+      message: 'Cron job initialized successfully (not started yet)',
+    });
   }
 
   /**
@@ -55,9 +58,15 @@ class CronJobManager {
 
     if (this.cronTask && !this.cronTask.running) {
       this.cronTask.start();
-      logger.info('Timer webhook cron job started - checking every minute');
+      logger.info({
+        message: 'Timer webhook cron job started - checking every minute',
+      });
     } else {
-      logger.warn('Cron job is already running or not initialized');
+      logger.warn({
+        message: 'Cron job is already running or not initialized',
+        isRunning: this.cronTask ? this.cronTask.running : false,
+        isInitialized: this.isInitialized,
+      });
     }
   }
 
@@ -67,7 +76,15 @@ class CronJobManager {
   stop() {
     if (this.cronTask && this.cronTask.running) {
       this.cronTask.stop();
-      logger.info('Timer webhook cron job stopped');
+      logger.info({
+        message: 'Timer webhook cron job stopped',
+      });
+    } else {
+      logger.warn({
+        message: 'Cron job is not running or not initialized',
+        isRunning: this.cronTask ? this.cronTask.running : false,
+        isInitialized: this.isInitialized,
+      });
     }
   }
 
@@ -90,11 +107,16 @@ class CronJobManager {
       const expiredJobs = await jobManager.getExpiredJobs();
 
       if (expiredJobs.length === 0) {
-        logger.debug('No expired jobs found');
+        logger.debug({
+          message: 'No expired jobs found',
+        });
         return;
       }
 
-      logger.info({ count: expiredJobs.length }, 'Processing expired jobs');
+      logger.info({
+        message: 'Processing expired jobs',
+        count: expiredJobs.length,
+      });
 
       // Process each expired job
       const results = await Promise.allSettled(
@@ -108,26 +130,28 @@ class CronJobManager {
       const failedCount = results.length - successCount;
 
       if (failedCount > 0) {
-        logger.warn(
-          {
-            total: expiredJobs.length,
-            success: successCount,
-            failed: failedCount,
-          },
-          'Some webhook calls failed'
-        );
+        logger.warn({
+          message: 'Some webhook calls failed',
+          total: expiredJobs.length,
+          success: successCount,
+          failed: failedCount,
+        });
       } else {
-        logger.info(
-          { total: expiredJobs.length, success: successCount },
-          'All webhook calls completed successfully'
-        );
+        logger.info({
+          message: 'All webhook calls completed successfully',
+          total: expiredJobs.length,
+          success: successCount,
+        });
       }
 
       // Remove all processed jobs (both successful and failed)
       const tripIds = expiredJobs.map(job => job.tripId);
       await jobManager.removeJobs(tripIds);
     } catch (error) {
-      logger.error({ err: error }, 'Failed to process expired jobs');
+      logger.error({
+        message: 'Failed to process expired jobs',
+        error: error.message,
+      });
     }
   }
 
@@ -140,10 +164,15 @@ class CronJobManager {
     const { tripId, webhookUrl, deadline } = job;
 
     try {
-      logger.info(
-        { tripId, webhookUrl, deadline, delay: Date.now() - deadline },
-        'Processing expired job - making webhook call'
-      );
+      const delay = Date.now() - deadline;
+
+      logger.info({
+        message: 'Processing expired job - making webhook call',
+        tripId,
+        webhookUrl,
+        deadline,
+        delay,
+      });
 
       // Prepare webhook payload
       const payload = {
@@ -162,17 +191,13 @@ class CronJobManager {
         },
       });
 
-      logger.info(
-        {
-          tripId,
-          webhookUrl,
-          statusCode: response.status,
-          responseTime:
-            response.config.metadata?.endTime -
-            response.config.metadata?.startTime,
-        },
-        'Webhook call successful'
-      );
+      logger.info({
+        message: 'Webhook call successful',
+        tripId,
+        webhookUrl,
+        statusCode: response.status,
+        responseSize: response.data ? JSON.stringify(response.data).length : 0,
+      });
 
       return {
         tripId,
@@ -183,30 +208,34 @@ class CronJobManager {
     } catch (error) {
       // Log different types of errors appropriately
       if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
-        logger.error(
-          { tripId, webhookUrl, errorCode: error.code },
-          'Webhook call failed - network/DNS error'
-        );
+        logger.error({
+          message: 'Webhook call failed - network/DNS error',
+          tripId,
+          webhookUrl,
+          errorCode: error.code,
+        });
       } else if (error.response) {
-        logger.error(
-          {
-            tripId,
-            webhookUrl,
-            statusCode: error.response.status,
-            responseData: error.response.data,
-          },
-          'Webhook call failed - HTTP error response'
-        );
+        logger.error({
+          message: 'Webhook call failed - HTTP error response',
+          tripId,
+          webhookUrl,
+          statusCode: error.response.status,
+          responseData: error.response.data,
+        });
       } else if (error.request) {
-        logger.error(
-          { tripId, webhookUrl, errorMessage: error.message },
-          'Webhook call failed - no response received'
-        );
+        logger.error({
+          message: 'Webhook call failed - no response received',
+          tripId,
+          webhookUrl,
+          errorMessage: error.message,
+        });
       } else {
-        logger.error(
-          { tripId, webhookUrl, err: error },
-          'Webhook call failed - unexpected error'
-        );
+        logger.error({
+          message: 'Webhook call failed - unexpected error',
+          tripId,
+          webhookUrl,
+          error: error.message,
+        });
       }
 
       return {
@@ -222,8 +251,15 @@ class CronJobManager {
    * Manually trigger processing of expired jobs (for testing/debugging)
    */
   async triggerManualProcess() {
-    logger.info('Manual trigger of expired job processing');
+    logger.info({
+      message: 'Manual processing of expired jobs triggered',
+    });
+
     await this.processExpiredJobs();
+
+    logger.info({
+      message: 'Manual processing of expired jobs completed',
+    });
   }
 }
 
