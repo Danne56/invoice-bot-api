@@ -4,8 +4,8 @@ const {
   createTransaction,
   getTransactionById,
   getTransactions,
-} = require('../../controllers/transactions.controller');
-const { validate } = require('../../middleware/validator');
+} = require('../controllers/transactions.controller');
+const { validate } = require('../middleware/validator');
 
 const router = express.Router();
 

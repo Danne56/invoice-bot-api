@@ -144,7 +144,7 @@ const createTransaction = async (req, res) => {
       tripId,
       currency,
       amount: major,
-      displayAmount: displayAmount,
+      displayAmount,
       merchant: merchant || null,
       message,
     });

@@ -83,8 +83,8 @@ const createTrip = async (req, res) => {
     );
     return res.status(201).json({
       success: true,
-      tripId: tripId,
-      userId: userId,
+      tripId,
+      userId,
       currency,
       eventName,
       message: `Trip '${eventName}' started (currency: ${currency})`,
@@ -412,9 +412,7 @@ const getTripSummary = async (req, res) => {
           tripCurrency,
           parseInt(stats.max_expense || 0)
         ),
-        transactions_with_merchant: parseInt(
-          stats.transactions_with_merchant
-        ),
+        transactions_with_merchant: parseInt(stats.transactions_with_merchant),
       },
     });
   } catch (err) {

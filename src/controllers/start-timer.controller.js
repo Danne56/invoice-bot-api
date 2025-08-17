@@ -75,9 +75,7 @@ const startTimer = async (req, res) => {
       expiresAt: new Date(job.deadline).toISOString(),
     });
   } catch (error) {
-    logger.error(
-      `Failed to start timer for trip ${tripId}: ${error.message}`
-    );
+    logger.error(`Failed to start timer for trip ${tripId}: ${error.message}`);
 
     res.status(500).json({
       success: false,

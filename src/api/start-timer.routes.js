@@ -1,8 +1,8 @@
 const express = require('express');
 const { body } = require('express-validator');
-const { startTimer } = require('../../controllers/start-timer.controller');
-const { parseDuration } = require('../../utils/timerHelpers');
-const { validate } = require('../../middleware/validator');
+const { startTimer } = require('../controllers/start-timer.controller');
+const { parseDuration } = require('../utils/timerHelpers');
+const { validate } = require('../middleware/validator');
 
 const router = express.Router();
 

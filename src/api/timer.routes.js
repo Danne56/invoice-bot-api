@@ -4,7 +4,7 @@ const {
   cancelTimer,
   listTimers,
   processExpiredTimers,
-} = require('../../controllers/timer.controller');
+} = require('../controllers/timer.controller');
 
 const router = express.Router();
 

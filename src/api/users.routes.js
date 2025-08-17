@@ -4,8 +4,8 @@ const {
   createUser,
   getUserByPhoneNumber,
   getUserStatus,
-} = require('../../controllers/users.controller');
-const { validate } = require('../../middleware/validator');
+} = require('../controllers/users.controller');
+const { validate } = require('../middleware/validator');
 
 const router = express.Router();
 

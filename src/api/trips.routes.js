@@ -6,8 +6,8 @@ const {
   getTripById,
   getTrips,
   getTripSummary,
-} = require('../../controllers/trips.controller');
-const { validate } = require('../../middleware/validator');
+} = require('../controllers/trips.controller');
+const { validate } = require('../middleware/validator');
 
 const router = express.Router();
 
@@ -18,7 +18,9 @@ const router = express.Router();
 router.post(
   '/',
   [
-    body('phoneNumber').isMobilePhone('any').withMessage('Invalid phone number'),
+    body('phoneNumber')
+      .isMobilePhone('any')
+      .withMessage('Invalid phone number'),
     body('eventName')
       .isLength({ min: 1, max: 255 })
       .trim()
