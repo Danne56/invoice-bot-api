@@ -1,4 +1,3 @@
-const express = require('express');
 const logger = require('../utils/logger');
 const jobManager = require('../utils/jobManager');
 const cronJobManager = require('../utils/cronJobs');
@@ -9,13 +8,7 @@ const {
   calculateTimerStats,
 } = require('../utils/timerHelpers');
 
-const router = express.Router();
-
-/**
- * GET /api/timer/status/:tripId
- * Get timer status for a specific tripId
- */
-router.get('/status/:tripId', async (req, res) => {
+const getTimerStatusByTripId = async (req, res) => {
   const { tripId } = req.params;
 
   try {
@@ -72,13 +65,9 @@ router.get('/status/:tripId', async (req, res) => {
       message: 'Failed to retrieve timer status',
     });
   }
-});
+};
 
-/**
- * DELETE /api/timer/:tripId
- * Cancel a timer for a specific tripId
- */
-router.delete('/:tripId', async (req, res) => {
+const cancelTimer = async (req, res) => {
   const { tripId } = req.params;
 
   try {
@@ -115,13 +104,9 @@ router.delete('/:tripId', async (req, res) => {
       message: 'Failed to cancel timer',
     });
   }
-});
+};
 
-/**
- * GET /api/timer/list
- * Get all active timers with enhanced statistics
- */
-router.get('/list', async (req, res) => {
+const listTimers = async (req, res) => {
   try {
     const jobs = await jobManager.getAllJobs();
     const cronStatus = cronJobManager.getStatus();
@@ -154,13 +139,9 @@ router.get('/list', async (req, res) => {
       message: 'Failed to retrieve timer list',
     });
   }
-});
+};
 
-/**
- * POST /api/timer/process-expired
- * Manually trigger processing of expired jobs
- */
-router.post('/process-expired', async (req, res) => {
+const processExpiredTimers = async (req, res) => {
   try {
     logger.info({
       message: 'Manual processing of expired jobs triggered',
@@ -188,6 +169,11 @@ router.post('/process-expired', async (req, res) => {
       message: 'Failed to process expired jobs',
     });
   }
-});
+};
 
-module.exports = router;
+module.exports = {
+  getTimerStatusByTripId,
+  cancelTimer,
+  listTimers,
+  processExpiredTimers,
+};
