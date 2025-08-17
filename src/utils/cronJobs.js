@@ -84,37 +84,78 @@ class CronJobManager {
   async processExpiredJobs() {
     try {
       const expiredJobs = await jobManager.getExpiredJobs();
+      const pendingRetries = await jobManager.getPendingRetries();
 
-      if (expiredJobs.length === 0) {
+      const allJobs = [...expiredJobs, ...pendingRetries];
+
+      if (allJobs.length === 0) {
         return;
       }
 
-      logger.info(`Processing ${expiredJobs.length} expired timer(s)`);
-
-      // Process each expired job
-      const results = await Promise.allSettled(
-        expiredJobs.map(job => this.processExpiredJob(job))
-      );
-
-      // Count successful and failed webhook calls
-      const successCount = results.filter(
-        result => result.status === 'fulfilled'
-      ).length;
-      const failedCount = results.length - successCount;
-
-      if (failedCount > 0) {
-        logger.warn(
-          `${failedCount} of ${expiredJobs.length} timer notifications failed`
-        );
-      } else {
+      // Log based on job types and count
+      if (expiredJobs.length > 0 && pendingRetries.length > 0) {
         logger.info(
-          `All ${expiredJobs.length} timer notifications sent successfully`
+          `Processing ${expiredJobs.length} expired timers and ${pendingRetries.length} pending retries`
         );
+      } else if (expiredJobs.length === 1 && pendingRetries.length === 0) {
+        logger.info(
+          `Timer expired for trip ${expiredJobs[0].tripId}, sending notification`
+        );
+      } else if (expiredJobs.length > 1 && pendingRetries.length === 0) {
+        logger.info(`Processing ${expiredJobs.length} expired timers`);
+      } else if (pendingRetries.length === 1 && expiredJobs.length === 0) {
+        logger.info(
+          `Retrying timer notification for trip ${pendingRetries[0].tripId}`
+        );
+      } else if (pendingRetries.length > 1 && expiredJobs.length === 0) {
+        logger.info(`Processing ${pendingRetries.length} timer retries`);
       }
 
-      // Remove all processed jobs (both successful and failed)
-      const tripIds = expiredJobs.map(job => job.tripId);
-      await jobManager.removeJobs(tripIds);
+      // Process all jobs (both expired and retries)
+      const results = await Promise.allSettled(
+        allJobs.map(job => this.processExpiredJob(job))
+      );
+
+      // Separate successful and failed results
+      const successfulJobs = [];
+      const failedJobs = [];
+
+      results.forEach((result, index) => {
+        const job = allJobs[index];
+        if (result.status === 'fulfilled' && result.value.success) {
+          successfulJobs.push(job);
+        } else {
+          failedJobs.push(job);
+        }
+      });
+
+      // Handle successful jobs - mark as completed
+      if (successfulJobs.length > 0) {
+        const successfulTripIds = successfulJobs.map(job => job.tripId);
+        await jobManager.markJobsCompleted(successfulTripIds);
+
+        if (successfulJobs.length === 1) {
+          logger.info(
+            `Timer notification sent successfully for trip ${successfulJobs[0].tripId}`
+          );
+        } else {
+          logger.info(
+            `${successfulJobs.length} timer notifications sent successfully`
+          );
+        }
+      }
+
+      // Handle failed jobs - schedule retries or mark as expired
+      if (failedJobs.length > 0) {
+        for (const job of failedJobs) {
+          const currentRetryCount = job.retryCount || 0;
+          await jobManager.scheduleRetry(job.tripId, currentRetryCount);
+        }
+
+        logger.warn(
+          `${failedJobs.length} timer notifications failed, scheduled for retry`
+        );
+      }
     } catch (error) {
       logger.error(`Failed to process expired timers: ${error.message}`);
     }
@@ -122,15 +163,13 @@ class CronJobManager {
 
   /**
    * Process a single expired job - make webhook call
-   * @param {Object} job - Job object with tripId, webhookUrl, deadline, phoneNumber
+   * @param {Object} job - Job object with tripId, webhookUrl, deadline, phoneNumber, retryCount
    * @returns {Promise<Object>} Result of webhook call
    */
   async processExpiredJob(job) {
-    const { tripId, webhookUrl, deadline, phoneNumber } = job;
+    const { tripId, webhookUrl, deadline, phoneNumber, retryCount = 0 } = job;
 
     try {
-      logger.info(`Sending timer notification for trip ${tripId}`);
-
       // Prepare webhook payload
       const payload = {
         tripId,
@@ -138,6 +177,8 @@ class CronJobManager {
         message: 'Timer selesai',
         timestamp: new Date().toISOString(),
         originalDeadline: new Date(deadline).toISOString(),
+        retryCount,
+        isRetry: retryCount > 0,
       };
 
       // Make HTTP POST request to webhook
@@ -149,17 +190,22 @@ class CronJobManager {
         },
       });
 
-      logger.info(`Timer notification sent successfully for trip ${tripId}`);
+      // Check if response indicates success
+      const isSuccess = response.status >= 200 && response.status < 300;
 
       return {
         tripId,
-        success: true,
+        success: isSuccess,
         statusCode: response.status,
         response: response.data,
+        retryCount,
       };
     } catch (error) {
+      // Determine if error is retryable
+      const isRetryableError = this.isRetryableError(error);
+
       logger.error(
-        `Failed to send timer notification for trip ${tripId}: ${error.message}`
+        `Failed to send timer notification for trip ${tripId} (attempt ${retryCount + 1}): ${error.message}`
       );
 
       return {
@@ -167,8 +213,44 @@ class CronJobManager {
         success: false,
         error: error.message,
         statusCode: error.response?.status,
+        retryCount,
+        isRetryable: isRetryableError,
       };
     }
+  }
+
+  /**
+   * Determine if an error is retryable
+   * @param {Error} error - The error object
+   * @returns {boolean} True if error should be retried
+   */
+  isRetryableError(error) {
+    // Network errors, timeouts, and 5xx server errors are retryable
+    if (
+      error.code === 'ECONNRESET' ||
+      error.code === 'ENOTFOUND' ||
+      error.code === 'ECONNREFUSED' ||
+      error.code === 'TIMEOUT'
+    ) {
+      return true;
+    }
+
+    // 5xx server errors are retryable
+    if (error.response && error.response.status >= 500) {
+      return true;
+    }
+
+    // 4xx client errors (except 408, 429) are not retryable
+    if (
+      error.response &&
+      error.response.status >= 400 &&
+      error.response.status < 500
+    ) {
+      // 408 Request Timeout and 429 Too Many Requests are retryable
+      return error.response.status === 408 || error.response.status === 429;
+    }
+
+    return true; // Default to retryable for unknown errors
   }
 
   /**

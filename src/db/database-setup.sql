@@ -60,7 +60,11 @@ CREATE TABLE IF NOT EXISTS webhook_timers (
     webhook_url TEXT NOT NULL,
     sender_id VARCHAR(12) NULL,  -- References users(id), who created the timer
     deadline_timestamp BIGINT NOT NULL,  -- Unix timestamp in milliseconds
-    status ENUM('active', 'expired', 'completed') NOT NULL DEFAULT 'active',
+    status ENUM('active', 'pending_retry', 'expired', 'completed') NOT NULL DEFAULT 'active',
+    retry_count INT NOT NULL DEFAULT 0,
+    max_retries INT NOT NULL DEFAULT 3,
+    last_retry_at DATETIME NULL,
+    next_retry_at DATETIME NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE,
@@ -69,7 +73,9 @@ CREATE TABLE IF NOT EXISTS webhook_timers (
     INDEX idx_deadline (deadline_timestamp),
     INDEX idx_status (status),
     INDEX idx_status_deadline (status, deadline_timestamp),
-    INDEX idx_sender_id (sender_id)
+    INDEX idx_sender_id (sender_id),
+    INDEX idx_next_retry (next_retry_at),
+    INDEX idx_status_retry (status, next_retry_at)
 );
 
 -- Show created tables

@@ -65,8 +65,6 @@ const startTimer = async (req, res) => {
       ? `Timer restarted! Will expire in ${formatDuration(timeUntilExpiry)}`
       : `Timer started! Will expire in ${formatDuration(timeUntilExpiry)}`;
 
-    logger.info(responseMessage.replace('!', '') + ` for trip ${tripId}`);
-
     res.status(200).json({
       success: true,
       tripId: job.tripId,

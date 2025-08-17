@@ -8,41 +8,7 @@ const { generateId } = require('./idGenerator');
  */
 class JobManager {
   constructor() {
-    this.initializeTable();
-  }
-
-  /**
-   * Initialize webhook_timers table if it doesn't exist
-   */
-  async initializeTable() {
-    let connection;
-    try {
-      connection = await pool.getConnection();
-
-      await connection.execute(`
-        CREATE TABLE IF NOT EXISTS webhook_timers (
-          id VARCHAR(12) PRIMARY KEY,
-          trip_id VARCHAR(12) NOT NULL,
-          webhook_url TEXT NOT NULL,
-          sender_id VARCHAR(12) NULL,
-          deadline_timestamp BIGINT NOT NULL,
-          status ENUM('active', 'expired', 'completed') NOT NULL DEFAULT 'active',
-          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-          INDEX idx_trip_id (trip_id),
-          INDEX idx_deadline (deadline_timestamp),
-          INDEX idx_status (status),
-          INDEX idx_status_deadline (status, deadline_timestamp),
-          INDEX idx_sender_id (sender_id),
-          FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE SET NULL
-        )
-      `);
-    } catch (error) {
-      logger.error(`Failed to initialize timer database: ${error.message}`);
-      // Don't throw - let the app continue even if table creation fails
-    } finally {
-      if (connection) connection.release();
-    }
+    // Table should be created via database-setup.sql
   }
 
   /**
@@ -249,11 +215,11 @@ class JobManager {
   }
 
   /**
-   * Remove multiple jobs by tripIds (mark as completed)
+   * Mark jobs as completed (only for successful deliveries)
    * @param {Array} tripIds - Array of trip identifiers
-   * @returns {Promise<number>} Number of jobs removed
+   * @returns {Promise<number>} Number of jobs marked as completed
    */
-  async removeJobs(tripIds) {
+  async markJobsCompleted(tripIds) {
     if (tripIds.length === 0) return 0;
 
     let connection;
@@ -265,23 +231,32 @@ class JobManager {
 
       const [result] = await connection.execute(
         `UPDATE webhook_timers SET status = 'completed', updated_at = NOW()
-         WHERE trip_id IN (${placeholders}) AND status = 'active'`,
+         WHERE trip_id IN (${placeholders}) AND status IN ('active', 'pending_retry')`,
         tripIdStrings
       );
 
-      const removedCount = result.affectedRows;
+      const completedCount = result.affectedRows;
 
-      if (removedCount > 0) {
-        logger.info(`${removedCount} timers completed`);
+      if (completedCount > 0) {
+        logger.info(`${completedCount} timers completed successfully`);
       }
 
-      return removedCount;
+      return completedCount;
     } catch (error) {
-      logger.error(`Failed to complete multiple timers: ${error.message}`);
+      logger.error(`Failed to mark timers as completed: ${error.message}`);
       throw error;
     } finally {
       if (connection) connection.release();
     }
+  }
+
+  /**
+   * Remove jobs by tripIds (legacy method - now marks as completed)
+   * @param {Array} tripIds - Array of trip identifiers
+   * @returns {Promise<number>} Number of jobs removed
+   */
+  async removeJobs(tripIds) {
+    return await this.markJobsCompleted(tripIds);
   }
 
   /**
@@ -336,6 +311,116 @@ class JobManager {
       return job;
     } catch (error) {
       logger.error(`Failed to get timer for trip ${tripId}: ${error.message}`);
+      throw error;
+    } finally {
+      if (connection) connection.release();
+    }
+  }
+
+  /**
+   * Schedule a job for retry with exponential backoff
+   * @param {string} tripId - Trip identifier
+   * @param {number} retryCount - Current retry count (0-based)
+   * @returns {Promise<boolean>} True if retry was scheduled
+   */
+  async scheduleRetry(tripId, retryCount = 0) {
+    let connection;
+    try {
+      connection = await pool.getConnection();
+
+      // Calculate next retry time with exponential backoff
+      // 1 min, 5 min, 15 min
+      const retryDelays = [1 * 60 * 1000, 5 * 60 * 1000, 15 * 60 * 1000];
+      const maxRetries = 3;
+
+      if (retryCount >= maxRetries) {
+        // Mark as expired if max retries exceeded
+        await connection.execute(
+          `UPDATE webhook_timers SET status = 'expired', updated_at = NOW()
+           WHERE trip_id = ? AND status IN ('active', 'pending_retry')`,
+          [tripId.toString()]
+        );
+
+        logger.warn(
+          `Timer for trip ${tripId} expired after ${maxRetries} retry attempts`
+        );
+        return false;
+      }
+
+      const nextRetryDelay =
+        retryDelays[retryCount] || retryDelays[retryDelays.length - 1];
+      const nextRetryAt = new Date(Date.now() + nextRetryDelay);
+
+      const [result] = await connection.execute(
+        `UPDATE webhook_timers
+         SET status = 'pending_retry',
+             retry_count = ?,
+             last_retry_at = NOW(),
+             next_retry_at = ?,
+             updated_at = NOW()
+         WHERE trip_id = ? AND status IN ('active', 'pending_retry')`,
+        [retryCount + 1, nextRetryAt, tripId.toString()]
+      );
+
+      const scheduled = result.affectedRows > 0;
+
+      if (scheduled) {
+        logger.info(
+          `Timer for trip ${tripId} scheduled for retry ${retryCount + 1}/${maxRetries} at ${nextRetryAt.toISOString()}`
+        );
+      }
+
+      return scheduled;
+    } catch (error) {
+      logger.error(
+        `Failed to schedule retry for trip ${tripId}: ${error.message}`
+      );
+      throw error;
+    } finally {
+      if (connection) connection.release();
+    }
+  }
+
+  /**
+   * Get jobs that are ready for retry
+   * @returns {Promise<Array>} Array of job objects ready for retry
+   */
+  async getPendingRetries() {
+    let connection;
+    try {
+      connection = await pool.getConnection();
+      const now = new Date();
+
+      const [rows] = await connection.execute(
+        `
+        SELECT wt.id, wt.trip_id as tripId, wt.webhook_url as webhookUrl,
+               wt.sender_id as senderId, wt.deadline_timestamp as deadline,
+               wt.status, wt.retry_count as retryCount, wt.max_retries as maxRetries,
+               wt.last_retry_at as lastRetryAt, wt.next_retry_at as nextRetryAt,
+               wt.created_at as createdAt, wt.updated_at as updatedAt,
+               u.phone_number as phoneNumber
+        FROM webhook_timers wt
+        LEFT JOIN users u ON wt.sender_id = u.id
+        WHERE wt.status = 'pending_retry' AND wt.next_retry_at <= ?
+        ORDER BY wt.next_retry_at ASC
+      `,
+        [now]
+      );
+
+      const retryJobs = rows.map(row => ({
+        ...row,
+        deadline: parseInt(row.deadline),
+        retryCount: parseInt(row.retryCount),
+        maxRetries: parseInt(row.maxRetries),
+        createdAt: row.createdAt.toISOString(),
+        updatedAt: row.updatedAt.toISOString(),
+        lastRetryAt: row.lastRetryAt ? row.lastRetryAt.toISOString() : null,
+        nextRetryAt: row.nextRetryAt ? row.nextRetryAt.toISOString() : null,
+      }));
+
+      return retryJobs;
+    } catch (error) {
+      logger.error(`Failed to get pending retries: ${error.message}`);
       throw error;
     } finally {
       if (connection) connection.release();
