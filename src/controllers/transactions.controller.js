@@ -181,20 +181,20 @@ const getTransactionById = async (req, res) => {
       ...t,
       currency,
       amount: t.total_amount ? toMajor(currency, t.total_amount) : 0,
-      display_amount: t.total_amount
+      displayAmount: t.total_amount
         ? formatAmountForDisplay(currency, parseInt(t.total_amount))
         : formatAmountForDisplay(currency, 0),
     };
     if (t.subtotal !== null && t.subtotal !== undefined) {
-      payload.subtotal_amount = toMajor(currency, t.subtotal);
-      payload.subtotal_display = formatAmountForDisplay(
+      payload.subtotalAmount = toMajor(currency, t.subtotal);
+      payload.subtotalDisplay = formatAmountForDisplay(
         currency,
         parseInt(t.subtotal)
       );
     }
     if (t.tax_amount !== null && t.tax_amount !== undefined) {
-      payload.tax_amount = toMajor(currency, t.tax_amount);
-      payload.tax_display = formatAmountForDisplay(
+      payload.taxAmount = toMajor(currency, t.tax_amount);
+      payload.taxDisplay = formatAmountForDisplay(
         currency,
         parseInt(t.tax_amount)
       );
@@ -264,20 +264,20 @@ const getTransactions = async (req, res) => {
         ...t,
         currency,
         amount: t.total_amount ? toMajor(currency, t.total_amount) : 0,
-        display_amount: t.total_amount
+        displayAmount: t.total_amount
           ? formatAmountForDisplay(currency, parseInt(t.total_amount))
           : formatAmountForDisplay(currency, 0),
       };
       if (t.subtotal !== null && t.subtotal !== undefined) {
-        row.subtotal_amount = toMajor(currency, t.subtotal);
-        row.subtotal_display = formatAmountForDisplay(
+        row.subtotalAmount = toMajor(currency, t.subtotal);
+        row.subtotalDisplay = formatAmountForDisplay(
           currency,
           parseInt(t.subtotal)
         );
       }
       if (t.tax_amount !== null && t.tax_amount !== undefined) {
-        row.tax_amount = toMajor(currency, t.tax_amount);
-        row.tax_display = formatAmountForDisplay(
+        row.taxAmount = toMajor(currency, t.tax_amount);
+        row.taxDisplay = formatAmountForDisplay(
           currency,
           parseInt(t.tax_amount)
         );

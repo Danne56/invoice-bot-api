@@ -36,7 +36,7 @@ const createTrip = async (req, res) => {
       await db.rollback();
       return res.status(400).json({
         error: 'Active trip already exists',
-        active_trip_id: active[0].id,
+        activeTripId: active[0].id,
       });
     }
 
@@ -51,7 +51,7 @@ const createTrip = async (req, res) => {
       return res.status(404).json({
         error: 'User not found',
         message: 'User must be created first before starting a trip',
-        phone_number: phoneNumber,
+        phoneNumber,
       });
     }
 
@@ -145,7 +145,7 @@ const stopTrip = async (req, res) => {
       eventName: trip.event_name,
       currency,
       amount: totalMajor,
-      display_amount: displayAmount,
+      displayAmount,
       message: `Trip '${trip.event_name}' completed with total expense: ${displayAmount}`,
     });
   } catch (err) {
@@ -191,7 +191,7 @@ const getTripById = async (req, res) => {
       tripCurrency === 'USD'
         ? Number(((trip.total_amount || 0) / 100).toFixed(2))
         : parseInt(trip.total_amount || 0);
-    trip.display_amount = formatAmountForDisplay(
+    trip.displayAmount = formatAmountForDisplay(
       tripCurrency,
       parseInt(trip.total_amount || 0)
     );
@@ -208,26 +208,26 @@ const getTripById = async (req, res) => {
             ? Number((parseInt(t.total_amount) / 100).toFixed(2))
             : parseInt(t.total_amount)
           : 0,
-        display_amount: t.total_amount
+        displayAmount: t.total_amount
           ? formatAmountForDisplay(currency, parseInt(t.total_amount))
           : formatAmountForDisplay(currency, 0),
       };
       if (t.subtotal !== null && t.subtotal !== undefined) {
-        row.subtotal_amount =
+        row.subtotalAmount =
           currency === 'USD'
             ? Number((parseInt(t.subtotal) / 100).toFixed(2))
             : parseInt(t.subtotal);
-        row.subtotal_display = formatAmountForDisplay(
+        row.subtotalDisplay = formatAmountForDisplay(
           currency,
           parseInt(t.subtotal)
         );
       }
       if (t.tax_amount !== null && t.tax_amount !== undefined) {
-        row.tax_amount =
+        row.taxAmount =
           currency === 'USD'
             ? Number((parseInt(t.tax_amount) / 100).toFixed(2))
             : parseInt(t.tax_amount);
-        row.tax_display = formatAmountForDisplay(
+        row.taxDisplay = formatAmountForDisplay(
           currency,
           parseInt(t.tax_amount)
         );
@@ -278,12 +278,12 @@ const getTrips = async (req, res) => {
         currency === 'USD'
           ? Number(((trip.total_amount || 0) / 100).toFixed(2))
           : parseInt(trip.total_amount || 0);
-      trip.display_amount = formatAmountForDisplay(
+      trip.displayAmount = formatAmountForDisplay(
         currency,
         parseInt(trip.total_amount || 0)
       );
       trip.currency = currency;
-      trip.transaction_count = parseInt(trip.transaction_count);
+      trip.transactionCount = parseInt(trip.transaction_count);
     });
 
     res.status(200).json({
@@ -355,64 +355,64 @@ const getTripSummary = async (req, res) => {
           'Mixed currencies detected in this trip. Single-currency per trip is enforced.',
         details: {
           currencies: distinctCurrencies,
-          trip_currency: tripCurrency,
+          tripCurrency,
         },
       });
     }
 
     res.status(200).json({
-      trip_info: {
+      tripInfo: {
         id: trip.id,
-        event_name: trip.event_name,
-        phone_number: trip.phone_number,
-        started_at: trip.started_at,
-        ended_at: trip.ended_at,
+        eventName: trip.event_name,
+        phoneNumber: trip.phone_number,
+        startedAt: trip.started_at,
+        endedAt: trip.ended_at,
         status: trip.status,
         currency: tripCurrency,
-        recorded_total_amount:
+        recordedTotalAmount:
           tripCurrency === 'USD'
             ? Number((parseInt(trip.total_amount) / 100).toFixed(2))
             : parseInt(trip.total_amount),
-        recorded_total_display: formatAmountForDisplay(
+        recordedTotalDisplay: formatAmountForDisplay(
           tripCurrency,
           parseInt(trip.total_amount)
         ),
       },
-      expense_summary: {
-        total_transactions: parseInt(stats.total_transactions),
-        calculated_total_amount:
+      expenseSummary: {
+        totalTransactions: parseInt(stats.total_transactions),
+        calculatedTotalAmount:
           tripCurrency === 'USD'
             ? Number((parseInt(stats.calculated_total) / 100).toFixed(2))
             : parseInt(stats.calculated_total),
-        calculated_total_display: formatAmountForDisplay(
+        calculatedTotalDisplay: formatAmountForDisplay(
           tripCurrency,
           parseInt(stats.calculated_total)
         ),
-        average_expense_amount:
+        averageExpenseAmount:
           tripCurrency === 'USD'
             ? Number((parseInt(stats.average_expense || 0) / 100).toFixed(2))
             : parseInt(stats.average_expense || 0),
-        average_expense_display: formatAmountForDisplay(
+        averageExpenseDisplay: formatAmountForDisplay(
           tripCurrency,
           parseInt(stats.average_expense || 0)
         ),
-        min_expense_amount:
+        minExpenseAmount:
           tripCurrency === 'USD'
             ? Number((parseInt(stats.min_expense || 0) / 100).toFixed(2))
             : parseInt(stats.min_expense || 0),
-        min_expense_display: formatAmountForDisplay(
+        minExpenseDisplay: formatAmountForDisplay(
           tripCurrency,
           parseInt(stats.min_expense || 0)
         ),
-        max_expense_amount:
+        maxExpenseAmount:
           tripCurrency === 'USD'
             ? Number((parseInt(stats.max_expense || 0) / 100).toFixed(2))
             : parseInt(stats.max_expense || 0),
-        max_expense_display: formatAmountForDisplay(
+        maxExpenseDisplay: formatAmountForDisplay(
           tripCurrency,
           parseInt(stats.max_expense || 0)
         ),
-        transactions_with_merchant: parseInt(stats.transactions_with_merchant),
+        transactionsWithMerchant: parseInt(stats.transactions_with_merchant),
       },
     });
   } catch (err) {

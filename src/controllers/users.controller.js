@@ -44,11 +44,11 @@ const createUser = async (req, res) => {
       success: true,
       user: {
         id: user.id,
-        phone_number: user.phone_number,
-        is_active: Boolean(user.is_active),
-        current_trip_id: user.current_trip_id,
-        created_at: user.created_at,
-        updated_at: user.updated_at,
+        phoneNumber: user.phone_number,
+        isActive: Boolean(user.is_active),
+        currentTripId: user.current_trip_id,
+        createdAt: user.created_at,
+        updatedAt: user.updated_at,
       },
       message: 'User ensured/created successfully',
     });
@@ -88,7 +88,7 @@ const getUserByPhoneNumber = async (req, res) => {
       const major =
         currency === 'USD' ? Number((minor / 100).toFixed(2)) : minor;
       user.amount = major;
-      user.display_amount = formatAmountForDisplay(currency, minor);
+      user.displayAmount = formatAmountForDisplay(currency, minor);
       user.currency = currency;
     }
 
@@ -131,21 +131,21 @@ const getUserStatus = async (req, res) => {
 
     const status = result[0];
     res.status(200).json({
-      is_active: Boolean(status.is_active),
-      current_trip: status.trip_id
+      isActive: Boolean(status.is_active),
+      currentTrip: status.trip_id
         ? (() => {
             const currency = status.currency || 'IDR';
             const minor = parseInt(status.total_amount || 0);
             const major =
               currency === 'USD' ? Number((minor / 100).toFixed(2)) : minor;
             return {
-              trip_id: status.trip_id,
-              event_name: status.event_name,
-              started_at: status.started_at,
+              tripId: status.trip_id,
+              eventName: status.event_name,
+              startedAt: status.started_at,
               currency,
               amount: major,
-              display_amount: formatAmountForDisplay(currency, minor),
-              transaction_count: parseInt(status.transaction_count || 0),
+              displayAmount: formatAmountForDisplay(currency, minor),
+              transactionCount: parseInt(status.transaction_count || 0),
             };
           })()
         : null,
