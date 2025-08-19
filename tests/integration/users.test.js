@@ -19,6 +19,9 @@ describe('Users API', () => {
       const mockConnection = {
         execute: jest.fn().mockResolvedValue([{ affectedRows: 1 }]),
         release: jest.fn(),
+        beginTransaction: jest.fn(),
+        commit: jest.fn(),
+        rollback: jest.fn(),
       };
 
       const mockUser = {
@@ -78,6 +81,8 @@ describe('Users API', () => {
     it('should handle database errors gracefully', async () => {
       const mockConnection = {
         execute: jest.fn().mockRejectedValue(new Error('Database error')),
+        beginTransaction: jest.fn(),
+        commit: jest.fn(),
         rollback: jest.fn(),
         release: jest.fn(),
       };

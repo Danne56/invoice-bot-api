@@ -28,6 +28,8 @@ describe('Users Controller', () => {
       execute: jest.fn(),
       release: jest.fn(),
       rollback: jest.fn(),
+      commit: jest.fn(),
+      beginTransaction: jest.fn(),
     };
     pool.getConnection.mockResolvedValue(db);
     jest.clearAllMocks();
@@ -53,8 +55,10 @@ describe('Users Controller', () => {
 
       await createUser(req, res);
 
+      expect(db.beginTransaction).toHaveBeenCalled();
       expect(idGenerator.generateId).toHaveBeenCalledWith(12);
       expect(db.execute).toHaveBeenCalledTimes(2);
+      expect(db.commit).toHaveBeenCalled();
       expect(res.status).toHaveBeenCalledWith(201);
       expect(res.json).toHaveBeenCalledWith({
         success: true,
@@ -88,8 +92,10 @@ describe('Users Controller', () => {
 
       await createUser(req, res);
 
+      expect(db.beginTransaction).toHaveBeenCalled();
       expect(idGenerator.generateId).toHaveBeenCalledWith(12); // Still called, but not used for existing user
       expect(db.execute).toHaveBeenCalledTimes(2);
+      expect(db.commit).toHaveBeenCalled();
       expect(res.status).toHaveBeenCalledWith(201);
       expect(res.json).toHaveBeenCalledWith({
         success: true,
@@ -112,12 +118,12 @@ describe('Users Controller', () => {
 
       await createUser(req, res);
 
+      expect(db.beginTransaction).toHaveBeenCalled();
       expect(res.status).toHaveBeenCalledWith(500);
       expect(res.json).toHaveBeenCalledWith({ error: 'Failed to create user' });
-<<<<<<< Updated upstream
       expect(db.rollback).toHaveBeenCalled();
-=======
->>>>>>> Stashed changes
+      expect(db.commit).not.toHaveBeenCalled();
+
       expect(logger.error).toHaveBeenCalled();
     });
   });

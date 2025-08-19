@@ -8,6 +8,7 @@ const createUser = async (req, res) => {
   const userId = generateId(12);
   const db = await pool.getConnection();
   try {
+    await db.beginTransaction();
     await db.execute(
       `INSERT INTO users (id, phone_number, is_active, created_at, updated_at)
        VALUES (?, ?, 0, NOW(), NOW())
@@ -23,6 +24,7 @@ const createUser = async (req, res) => {
     );
     const user = rows[0];
 
+    await db.commit();
     res.status(201).json({
       success: true,
       user: {
@@ -36,6 +38,7 @@ const createUser = async (req, res) => {
       message: 'User ensured/created successfully',
     });
   } catch (err) {
+    await db.rollback();
     logger.error({ err, reqBody: req.body }, 'Failed to create user');
     res.status(500).json({ error: 'Failed to create user' });
   } finally {
