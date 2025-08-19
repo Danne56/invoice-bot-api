@@ -1,43 +1,10 @@
 const { generateId } = require('../utils/idGenerator');
 const pool = require('../utils/db');
 const logger = require('../utils/logger');
+const { toMinor } = require('../utils/currency');
+const { formatTransaction } = require('../utils/payloadFormatter');
 
-// Helpers for currency handling
-function toMinor(currency, value) {
-  if (currency === 'USD') {
-    // Support numbers or numeric strings, round to cents
-    const num = typeof value === 'string' ? Number(value) : value;
-    return Math.round(num * 100);
-  }
-  // IDR: already integer rupiah
-  return parseInt(value);
-}
-
-function toMajor(currency, minor) {
-  const n = typeof minor === 'string' ? parseInt(minor) : minor;
-  if (currency === 'USD') {
-    return Number((n / 100).toFixed(2));
-  }
-  return n; // IDR
-}
-
-function formatAmountForDisplay(currency, minorAmount) {
-  const major =
-    currency === 'USD' ? Number((minorAmount / 100).toFixed(2)) : minorAmount;
-  const symbol = currency === 'USD' ? '$' : 'Rp';
-
-  if (currency === 'USD') {
-    const formatted = major.toLocaleString('en-US', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    });
-    return `${symbol} ${formatted}`;
-  } else {
-    // IDR: Use Indonesian format with periods as thousand separators
-    const formatted = major.toLocaleString('id-ID').replace(/,/g, '.');
-    return `${symbol}${formatted}`;
-  }
-}
+// --- Helper Functions ---
 
 async function getTripAndEnforceCurrency(db, tripId, requestedCurrency) {
   const [trips] = await db.execute(
@@ -132,19 +99,21 @@ const createTransaction = async (req, res) => {
       'Invoice transaction created successfully'
     );
 
-    // Format amount with thousand separators for IDR
-    const major = toMajor(currency, toMinor(currency, totalAmount));
-    const minorAmount = toMinor(currency, totalAmount);
-    const displayAmount = formatAmountForDisplay(currency, minorAmount);
-    const message = `Invoice of ${displayAmount} recorded successfully`;
+    // Use the formatter for the response
+    const tempTransaction = {
+      total_amount: toMinor(currency, totalAmount),
+      currency,
+    };
+    const formatted = formatTransaction(tempTransaction);
+    const message = `Invoice of ${formatted.displayAmount} recorded successfully`;
 
     res.status(201).json({
       success: true,
       transactionId: newTransactionId,
       tripId,
       currency,
-      amount: major,
-      displayAmount,
+      amount: formatted.amount,
+      displayAmount: formatted.displayAmount,
       merchant: merchant || null,
       message,
     });
@@ -175,31 +144,7 @@ const getTransactionById = async (req, res) => {
       return res.status(404).json({ error: 'Transaction not found' });
     }
 
-    const t = transactions[0];
-    const currency = t.currency || 'IDR';
-    const payload = {
-      ...t,
-      currency,
-      amount: t.total_amount ? toMajor(currency, t.total_amount) : 0,
-      displayAmount: t.total_amount
-        ? formatAmountForDisplay(currency, parseInt(t.total_amount))
-        : formatAmountForDisplay(currency, 0),
-    };
-    if (t.subtotal !== null && t.subtotal !== undefined) {
-      payload.subtotalAmount = toMajor(currency, t.subtotal);
-      payload.subtotalDisplay = formatAmountForDisplay(
-        currency,
-        parseInt(t.subtotal)
-      );
-    }
-    if (t.tax_amount !== null && t.tax_amount !== undefined) {
-      payload.taxAmount = toMajor(currency, t.tax_amount);
-      payload.taxDisplay = formatAmountForDisplay(
-        currency,
-        parseInt(t.tax_amount)
-      );
-    }
-
+    const payload = formatTransaction(transactions[0]);
     res.status(200).json({ data: payload });
   } catch (err) {
     logger.error({ err, transactionId }, 'Failed to fetch transaction');
@@ -257,33 +202,7 @@ const getTransactions = async (req, res) => {
 
     const [transactions] = await db.execute(query, params);
 
-    // Map with currency and dual amounts
-    const data = transactions.map(t => {
-      const currency = t.currency || 'IDR';
-      const row = {
-        ...t,
-        currency,
-        amount: t.total_amount ? toMajor(currency, t.total_amount) : 0,
-        displayAmount: t.total_amount
-          ? formatAmountForDisplay(currency, parseInt(t.total_amount))
-          : formatAmountForDisplay(currency, 0),
-      };
-      if (t.subtotal !== null && t.subtotal !== undefined) {
-        row.subtotalAmount = toMajor(currency, t.subtotal);
-        row.subtotalDisplay = formatAmountForDisplay(
-          currency,
-          parseInt(t.subtotal)
-        );
-      }
-      if (t.tax_amount !== null && t.tax_amount !== undefined) {
-        row.taxAmount = toMajor(currency, t.tax_amount);
-        row.taxDisplay = formatAmountForDisplay(
-          currency,
-          parseInt(t.tax_amount)
-        );
-      }
-      return row;
-    });
+    const data = transactions.map(t => formatTransaction(t));
 
     res.status(200).json({
       data,

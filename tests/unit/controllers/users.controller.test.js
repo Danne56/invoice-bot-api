@@ -114,7 +114,10 @@ describe('Users Controller', () => {
 
       expect(res.status).toHaveBeenCalledWith(500);
       expect(res.json).toHaveBeenCalledWith({ error: 'Failed to create user' });
+<<<<<<< Updated upstream
       expect(db.rollback).toHaveBeenCalled();
+=======
+>>>>>>> Stashed changes
       expect(logger.error).toHaveBeenCalled();
     });
   });

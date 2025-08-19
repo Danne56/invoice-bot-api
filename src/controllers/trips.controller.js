@@ -1,24 +1,10 @@
 const pool = require('../utils/db');
 const logger = require('../utils/logger');
 const { generateId } = require('../utils/idGenerator');
-
-function formatAmountForDisplay(currency, minorAmount) {
-  const major =
-    currency === 'USD' ? Number((minorAmount / 100).toFixed(2)) : minorAmount;
-  const symbol = currency === 'USD' ? '$' : 'Rp';
-
-  if (currency === 'USD') {
-    const formatted = major.toLocaleString('en-US', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    });
-    return `${symbol} ${formatted}`;
-  } else {
-    // IDR: Use Indonesian format with periods as thousand separators
-    const formatted = major.toLocaleString('id-ID').replace(/,/g, '.');
-    return `${symbol}${formatted}`;
-  }
-}
+const {
+  formatAmount,
+  formatTransaction,
+} = require('../utils/payloadFormatter');
 
 const createTrip = async (req, res) => {
   const { phoneNumber, eventName, currency = 'IDR' } = req.body;
@@ -135,16 +121,14 @@ const stopTrip = async (req, res) => {
 
     await db.commit();
     const currency = trip.currency || 'IDR';
-    const totalMajor =
-      currency === 'USD' ? Number((totalMinor / 100).toFixed(2)) : totalMinor;
-    const displayAmount = formatAmountForDisplay(currency, totalMinor);
+    const { amount, displayAmount } = formatAmount(currency, totalMinor);
     logger.info({ tripId, totalMinor, currency }, 'Trip stopped');
     return res.status(200).json({
       success: true,
       tripId,
       eventName: trip.event_name,
       currency,
-      amount: totalMajor,
+      amount,
       displayAmount,
       message: `Trip '${trip.event_name}' completed with total expense: ${displayAmount}`,
     });
@@ -186,54 +170,18 @@ const getTripById = async (req, res) => {
 
     const trip = trips[0];
     const tripCurrency = trip.currency || 'IDR';
-    // Convert trip total to major by trip currency
-    trip.amount =
-      tripCurrency === 'USD'
-        ? Number(((trip.total_amount || 0) / 100).toFixed(2))
-        : parseInt(trip.total_amount || 0);
-    trip.displayAmount = formatAmountForDisplay(
+    const { amount, displayAmount } = formatAmount(
       tripCurrency,
-      parseInt(trip.total_amount || 0)
+      trip.total_amount
     );
+    trip.amount = amount;
+    trip.displayAmount = displayAmount;
     trip.currency = tripCurrency;
 
     // Map transactions with currency and dual amounts
-    trip.transactions = transactions.map(t => {
-      const currency = t.currency || tripCurrency;
-      const row = {
-        ...t,
-        currency,
-        amount: t.total_amount
-          ? currency === 'USD'
-            ? Number((parseInt(t.total_amount) / 100).toFixed(2))
-            : parseInt(t.total_amount)
-          : 0,
-        displayAmount: t.total_amount
-          ? formatAmountForDisplay(currency, parseInt(t.total_amount))
-          : formatAmountForDisplay(currency, 0),
-      };
-      if (t.subtotal !== null && t.subtotal !== undefined) {
-        row.subtotalAmount =
-          currency === 'USD'
-            ? Number((parseInt(t.subtotal) / 100).toFixed(2))
-            : parseInt(t.subtotal);
-        row.subtotalDisplay = formatAmountForDisplay(
-          currency,
-          parseInt(t.subtotal)
-        );
-      }
-      if (t.tax_amount !== null && t.tax_amount !== undefined) {
-        row.taxAmount =
-          currency === 'USD'
-            ? Number((parseInt(t.tax_amount) / 100).toFixed(2))
-            : parseInt(t.tax_amount);
-        row.taxDisplay = formatAmountForDisplay(
-          currency,
-          parseInt(t.tax_amount)
-        );
-      }
-      return row;
-    });
+    trip.transactions = transactions.map(t =>
+      formatTransaction(t, tripCurrency)
+    );
 
     res.status(200).json({ data: trip });
   } catch (err) {
@@ -274,14 +222,12 @@ const getTrips = async (req, res) => {
     // Convert totals for each trip using trip currency
     trips.forEach(trip => {
       const currency = trip.currency || 'IDR';
-      trip.amount =
-        currency === 'USD'
-          ? Number(((trip.total_amount || 0) / 100).toFixed(2))
-          : parseInt(trip.total_amount || 0);
-      trip.displayAmount = formatAmountForDisplay(
+      const { amount, displayAmount } = formatAmount(
         currency,
-        parseInt(trip.total_amount || 0)
+        trip.total_amount
       );
+      trip.amount = amount;
+      trip.displayAmount = displayAmount;
       trip.currency = currency;
       trip.transactionCount = parseInt(trip.transaction_count);
     });
@@ -309,7 +255,7 @@ const getTripSummary = async (req, res) => {
     // Get trip basic info
     const [trips] = await db.execute(
       `
-      SELECT id, event_name, phone_number, started_at, ended_at, total_amount, status
+      SELECT id, event_name, phone_number, started_at, ended_at, total_amount, status, currency
       FROM trips WHERE id = ?
     `,
       [tripId]
@@ -360,6 +306,12 @@ const getTripSummary = async (req, res) => {
       });
     }
 
+    const recordedTotal = formatAmount(tripCurrency, trip.total_amount);
+    const calculatedTotal = formatAmount(tripCurrency, stats.calculated_total);
+    const averageExpense = formatAmount(tripCurrency, stats.average_expense);
+    const minExpense = formatAmount(tripCurrency, stats.min_expense);
+    const maxExpense = formatAmount(tripCurrency, stats.max_expense);
+
     res.status(200).json({
       tripInfo: {
         id: trip.id,
@@ -369,49 +321,19 @@ const getTripSummary = async (req, res) => {
         endedAt: trip.ended_at,
         status: trip.status,
         currency: tripCurrency,
-        recordedTotalAmount:
-          tripCurrency === 'USD'
-            ? Number((parseInt(trip.total_amount) / 100).toFixed(2))
-            : parseInt(trip.total_amount),
-        recordedTotalDisplay: formatAmountForDisplay(
-          tripCurrency,
-          parseInt(trip.total_amount)
-        ),
+        recordedTotalAmount: recordedTotal.amount,
+        recordedTotalDisplay: recordedTotal.displayAmount,
       },
       expenseSummary: {
         totalTransactions: parseInt(stats.total_transactions),
-        calculatedTotalAmount:
-          tripCurrency === 'USD'
-            ? Number((parseInt(stats.calculated_total) / 100).toFixed(2))
-            : parseInt(stats.calculated_total),
-        calculatedTotalDisplay: formatAmountForDisplay(
-          tripCurrency,
-          parseInt(stats.calculated_total)
-        ),
-        averageExpenseAmount:
-          tripCurrency === 'USD'
-            ? Number((parseInt(stats.average_expense || 0) / 100).toFixed(2))
-            : parseInt(stats.average_expense || 0),
-        averageExpenseDisplay: formatAmountForDisplay(
-          tripCurrency,
-          parseInt(stats.average_expense || 0)
-        ),
-        minExpenseAmount:
-          tripCurrency === 'USD'
-            ? Number((parseInt(stats.min_expense || 0) / 100).toFixed(2))
-            : parseInt(stats.min_expense || 0),
-        minExpenseDisplay: formatAmountForDisplay(
-          tripCurrency,
-          parseInt(stats.min_expense || 0)
-        ),
-        maxExpenseAmount:
-          tripCurrency === 'USD'
-            ? Number((parseInt(stats.max_expense || 0) / 100).toFixed(2))
-            : parseInt(stats.max_expense || 0),
-        maxExpenseDisplay: formatAmountForDisplay(
-          tripCurrency,
-          parseInt(stats.max_expense || 0)
-        ),
+        calculatedTotalAmount: calculatedTotal.amount,
+        calculatedTotalDisplay: calculatedTotal.displayAmount,
+        averageExpenseAmount: averageExpense.amount,
+        averageExpenseDisplay: averageExpense.displayAmount,
+        minExpenseAmount: minExpense.amount,
+        minExpenseDisplay: minExpense.displayAmount,
+        maxExpenseAmount: maxExpense.amount,
+        maxExpenseDisplay: maxExpense.displayAmount,
         transactionsWithMerchant: parseInt(stats.transactions_with_merchant),
       },
     });

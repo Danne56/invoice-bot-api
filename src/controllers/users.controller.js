@@ -1,24 +1,7 @@
 const { generateId } = require('../utils/idGenerator');
 const pool = require('../utils/db');
 const logger = require('../utils/logger');
-
-function formatAmountForDisplay(currency, minorAmount) {
-  const major =
-    currency === 'USD' ? Number((minorAmount / 100).toFixed(2)) : minorAmount;
-  const symbol = currency === 'USD' ? '$' : 'Rp';
-
-  if (currency === 'USD') {
-    const formatted = major.toLocaleString('en-US', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    });
-    return `${symbol} ${formatted}`;
-  } else {
-    // IDR: Use Indonesian format with periods as thousand separators
-    const formatted = major.toLocaleString('id-ID').replace(/,/g, '.');
-    return `${symbol}${formatted}`;
-  }
-}
+const { formatAmount } = require('../utils/payloadFormatter');
 
 const createUser = async (req, res) => {
   const { phoneNumber } = req.body;
@@ -53,7 +36,6 @@ const createUser = async (req, res) => {
       message: 'User ensured/created successfully',
     });
   } catch (err) {
-    await db.rollback();
     logger.error({ err, reqBody: req.body }, 'Failed to create user');
     res.status(500).json({ error: 'Failed to create user' });
   } finally {
@@ -80,15 +62,15 @@ const getUserByPhoneNumber = async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Convert total_amount to integer for IDR if it exists
     const user = users[0];
     if (user.total_amount !== null) {
       const currency = user.current_trip_currency || 'IDR';
-      const minor = parseInt(user.total_amount);
-      const major =
-        currency === 'USD' ? Number((minor / 100).toFixed(2)) : minor;
-      user.amount = major;
-      user.displayAmount = formatAmountForDisplay(currency, minor);
+      const { amount, displayAmount } = formatAmount(
+        currency,
+        user.total_amount
+      );
+      user.amount = amount;
+      user.displayAmount = displayAmount;
       user.currency = currency;
     }
 
@@ -135,16 +117,17 @@ const getUserStatus = async (req, res) => {
       currentTrip: status.trip_id
         ? (() => {
             const currency = status.currency || 'IDR';
-            const minor = parseInt(status.total_amount || 0);
-            const major =
-              currency === 'USD' ? Number((minor / 100).toFixed(2)) : minor;
+            const { amount, displayAmount } = formatAmount(
+              currency,
+              status.total_amount
+            );
             return {
               tripId: status.trip_id,
               eventName: status.event_name,
               startedAt: status.started_at,
               currency,
-              amount: major,
-              displayAmount: formatAmountForDisplay(currency, minor),
+              amount,
+              displayAmount,
               transactionCount: parseInt(status.transaction_count || 0),
             };
           })()
