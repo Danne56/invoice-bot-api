@@ -28,7 +28,7 @@ if (process.env.NODE_ENV !== 'development') {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'OK',
-    message: 'WhatsApp Trip Expense Bot API is running',
+    message: 'WhatsApp Trip Expense Bot API is henlo',
     timestamp: new Date().toISOString(),
   });
 });
