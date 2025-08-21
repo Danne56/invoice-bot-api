@@ -10,9 +10,7 @@ WORKDIR /app
 
 COPY package*.json ./
 
-RUN --mount=type=cache,target=/usr/src/app/.npm \
-  npm set cache /usr/src/app/.npm && \
-  npm ci && npm cache clean --force
+RUN npm ci && npm cache clean --force
 
 USER node
 COPY --chown=node:node . .
@@ -28,9 +26,7 @@ WORKDIR /app
 
 COPY package*.json .
 
-RUN --mount=type=cache,target=/usr/src/app/.npm \
-  npm set cache /usr/src/app/.npm && \
-  npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev && npm cache clean --force
 
 USER node
 COPY --chown=node:node . .
