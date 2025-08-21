@@ -46,7 +46,7 @@ describe('Users API', () => {
 
       expect(response.body).toHaveProperty('success', true);
       expect(response.body).toHaveProperty('message');
-      expect(response.body.user).toHaveProperty('id');
+      expect(response.body.user).toHaveProperty('userId');
       expect(response.body.user).toHaveProperty(
         'phoneNumber',
         VALID_PHONE_NUMBER
@@ -127,9 +127,9 @@ describe('Users API', () => {
         .expect(200);
 
       expect(response.body).toHaveProperty('data');
-      expect(response.body.data).toHaveProperty('id', 'user-123');
+      expect(response.body.data).toHaveProperty('userId', 'user-123');
       expect(response.body.data).toHaveProperty(
-        'phone_number',
+        'phoneNumber',
         VALID_PHONE_NUMBER
       );
     });

@@ -314,7 +314,7 @@ const getTripSummary = async (req, res) => {
 
     res.status(200).json({
       tripInfo: {
-        id: trip.id,
+        tripId: trip.id,
         eventName: trip.event_name,
         phoneNumber: trip.phone_number,
         startedAt: trip.started_at,

@@ -28,7 +28,7 @@ const createUser = async (req, res) => {
     res.status(201).json({
       success: true,
       user: {
-        id: user.id,
+        userId: user.id,
         phoneNumber: user.phone_number,
         isActive: Boolean(user.is_active),
         currentTripId: user.current_trip_id,
@@ -66,18 +66,35 @@ const getUserByPhoneNumber = async (req, res) => {
     }
 
     const user = users[0];
+
+    // Create consistent response format
+    const responseUser = {
+      userId: user.id,
+      phoneNumber: user.phone_number,
+      isActive: Boolean(user.is_active),
+      currentTripId: user.current_trip_id,
+      createdAt: user.created_at,
+      updatedAt: user.updated_at,
+    };
+
+    // Add trip information if available
+    if (user.current_trip_name) {
+      responseUser.currentTripName = user.current_trip_name;
+      responseUser.tripStartedAt = user.trip_started_at;
+    }
+
     if (user.total_amount !== null) {
       const currency = user.current_trip_currency || 'IDR';
       const { amount, displayAmount } = formatAmount(
         currency,
         user.total_amount
       );
-      user.amount = amount;
-      user.displayAmount = displayAmount;
-      user.currency = currency;
+      responseUser.amount = amount;
+      responseUser.displayAmount = displayAmount;
+      responseUser.currency = currency;
     }
 
-    res.status(200).json({ data: user });
+    res.status(200).json({ data: responseUser });
   } catch (err) {
     logger.error({ err, phoneNumber }, 'Failed to fetch user');
     res.status(500).json({ error: 'Failed to fetch user' });

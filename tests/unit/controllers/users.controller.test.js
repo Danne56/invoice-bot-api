@@ -65,10 +65,10 @@ describe('Users Controller', () => {
       expect(res.json).toHaveBeenCalledWith({
         success: true,
         user: {
-          id: mockUser.id,
+          userId: mockUser.id,
           phoneNumber: mockUser.phone_number,
-          isActive: false,
-          currentTripId: null,
+          isActive: Boolean(mockUser.is_active),
+          currentTripId: mockUser.current_trip_id,
           createdAt: mockUser.created_at,
           updatedAt: mockUser.updated_at,
         },
@@ -102,7 +102,7 @@ describe('Users Controller', () => {
       expect(res.json).toHaveBeenCalledWith({
         success: true,
         user: {
-          id: mockUser.id,
+          userId: mockUser.id,
           phoneNumber: mockUser.phone_number,
           isActive: true,
           currentTripId: 'trip-123',
@@ -150,7 +150,7 @@ describe('Users Controller', () => {
       expect(res.status).toHaveBeenCalledWith(200);
       expect(res.json).toHaveBeenCalledWith({
         data: expect.objectContaining({
-          id: 'user-123',
+          userId: 'user-123',
           amount: 100000,
           displayAmount: 'Rp100.000',
         }),
@@ -176,7 +176,7 @@ describe('Users Controller', () => {
       expect(res.status).toHaveBeenCalledWith(200);
       expect(res.json).toHaveBeenCalledWith({
         data: expect.objectContaining({
-          id: 'user-123',
+          userId: 'user-123',
           amount: 500,
           displayAmount: '$ 500.00',
         }),
@@ -201,7 +201,7 @@ describe('Users Controller', () => {
 
       expect(res.status).toHaveBeenCalledWith(200);
       const responseData = res.json.mock.calls[0][0].data;
-      expect(responseData.id).toBe('user-123');
+      expect(responseData.userId).toBe('user-123');
       expect(responseData.amount).toBeUndefined();
       expect(responseData.displayAmount).toBeUndefined();
     });
@@ -233,7 +233,9 @@ describe('Users Controller', () => {
     it('should return user status with an active trip in USD', async () => {
       req.params.phoneNumber = '6281234567890';
       const mockStatus = {
+        id: 'user-123',
         is_active: 1,
+        intro_sent_today: 0,
         trip_id: 'trip-123',
         event_name: 'Business Trip',
         started_at: '2023-01-01T00:00:00.000Z',
@@ -247,7 +249,9 @@ describe('Users Controller', () => {
 
       expect(res.status).toHaveBeenCalledWith(200);
       expect(res.json).toHaveBeenCalledWith({
+        userId: 'user-123',
         isActive: true,
+        introSentToday: false,
         currentTrip: {
           tripId: 'trip-123',
           eventName: 'Business Trip',
@@ -263,7 +267,9 @@ describe('Users Controller', () => {
     it('should return user status with an active trip in IDR', async () => {
       req.params.phoneNumber = '6281234567890';
       const mockStatus = {
+        id: 'user-456',
         is_active: 1,
+        intro_sent_today: 0,
         trip_id: 'trip-456',
         event_name: 'Holiday Trip',
         started_at: '2023-02-01T00:00:00.000Z',
@@ -277,7 +283,9 @@ describe('Users Controller', () => {
 
       expect(res.status).toHaveBeenCalledWith(200);
       expect(res.json).toHaveBeenCalledWith({
+        userId: 'user-456',
         isActive: true,
+        introSentToday: false,
         currentTrip: {
           tripId: 'trip-456',
           eventName: 'Holiday Trip',
@@ -293,7 +301,9 @@ describe('Users Controller', () => {
     it('should return user status with no active trip', async () => {
       req.params.phoneNumber = '6281234567890';
       const mockStatus = {
+        id: 'user-789',
         is_active: 0,
+        intro_sent_today: 0,
         trip_id: null,
       };
       db.execute.mockResolvedValue([[mockStatus]]);
@@ -302,7 +312,9 @@ describe('Users Controller', () => {
 
       expect(res.status).toHaveBeenCalledWith(200);
       expect(res.json).toHaveBeenCalledWith({
+        userId: 'user-789',
         isActive: false,
+        introSentToday: false,
         currentTrip: null,
       });
     });

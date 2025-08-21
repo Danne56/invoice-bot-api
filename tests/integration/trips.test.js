@@ -715,7 +715,7 @@ describe('Trips API', () => {
 
       expect(response.body).toHaveProperty('tripInfo');
       expect(response.body).toHaveProperty('expenseSummary');
-      expect(response.body.tripInfo).toHaveProperty('id', VALID_TRIP_ID);
+      expect(response.body.tripInfo).toHaveProperty('tripId', VALID_TRIP_ID);
       expect(response.body.tripInfo).toHaveProperty(
         'eventName',
         VALID_EVENT_NAME
