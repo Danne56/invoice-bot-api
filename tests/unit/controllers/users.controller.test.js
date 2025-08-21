@@ -2,6 +2,8 @@ const {
   createUser,
   getUserByPhoneNumber,
   getUserStatus,
+  markIntroSent,
+  resetIntroFlags,
 } = require('../../../src/controllers/users.controller');
 const pool = require('../../../src/utils/db');
 const idGenerator = require('../../../src/utils/idGenerator');
@@ -327,6 +329,133 @@ describe('Users Controller', () => {
         error: 'Failed to fetch user status',
       });
       expect(logger.error).toHaveBeenCalled();
+    });
+  });
+
+  describe('markIntroSent', () => {
+    it('should mark intro as sent and return 200', async () => {
+      req.params.userId = 'user-123';
+      const mockUser = [{ id: 'user-123' }];
+      const mockResult = { affectedRows: 1 };
+
+      db.execute
+        .mockResolvedValueOnce([mockUser])
+        .mockResolvedValueOnce([mockResult]);
+
+      await markIntroSent(req, res);
+
+      expect(db.execute).toHaveBeenCalledTimes(2);
+      expect(db.execute).toHaveBeenCalledWith(
+        'SELECT id FROM users WHERE id = ?',
+        ['user-123']
+      );
+      expect(db.execute).toHaveBeenCalledWith(
+        'UPDATE users SET intro_sent_today = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+        ['user-123']
+      );
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({ success: true });
+      expect(logger.info).toHaveBeenCalledWith({
+        message: 'Intro marked as sent for user user-123',
+      });
+    });
+
+    it('should return 404 if user not found', async () => {
+      req.params.userId = 'nonexistent-user';
+      db.execute.mockResolvedValueOnce([[]]);
+
+      await markIntroSent(req, res);
+
+      expect(db.execute).toHaveBeenCalledTimes(1);
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(res.json).toHaveBeenCalledWith({ error: 'User not found' });
+    });
+
+    it('should return 404 if update affects no rows', async () => {
+      req.params.userId = 'user-123';
+      const mockUser = [{ id: 'user-123' }];
+      const mockResult = { affectedRows: 0 };
+
+      db.execute
+        .mockResolvedValueOnce([mockUser])
+        .mockResolvedValueOnce([mockResult]);
+
+      await markIntroSent(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(res.json).toHaveBeenCalledWith({ error: 'User not found' });
+    });
+
+    it('should handle database errors and return 500', async () => {
+      req.params.userId = 'user-123';
+      const error = new Error('Database error');
+      db.execute.mockRejectedValue(error);
+
+      await markIntroSent(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith({
+        error: 'Failed to update intro status',
+      });
+      expect(logger.error).toHaveBeenCalledWith({
+        message: 'DB Error (mark intro sent)',
+        error: error.message,
+      });
+    });
+  });
+
+  describe('resetIntroFlags', () => {
+    it('should reset intro flags and return 200', async () => {
+      const mockResult = { affectedRows: 5 };
+      db.execute.mockResolvedValueOnce([mockResult]);
+
+      await resetIntroFlags(req, res);
+
+      expect(db.execute).toHaveBeenCalledWith(
+        'UPDATE users SET intro_sent_today = 0, updated_at = CURRENT_TIMESTAMP WHERE intro_sent_today = 1'
+      );
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        message: 'Reset intro flags for 5 users',
+      });
+      expect(logger.info).toHaveBeenCalledWith({
+        message: 'Intro flags reset successfully',
+        affectedRows: 5,
+      });
+    });
+
+    it('should handle case when no users need flag reset', async () => {
+      const mockResult = { affectedRows: 0 };
+      db.execute.mockResolvedValueOnce([mockResult]);
+
+      await resetIntroFlags(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        message: 'Reset intro flags for 0 users',
+      });
+      expect(logger.info).toHaveBeenCalledWith({
+        message: 'Intro flags reset successfully',
+        affectedRows: 0,
+      });
+    });
+
+    it('should handle database errors and return 500', async () => {
+      const error = new Error('Database error');
+      db.execute.mockRejectedValue(error);
+
+      await resetIntroFlags(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith({
+        error: 'Failed to reset intro flags',
+      });
+      expect(logger.error).toHaveBeenCalledWith({
+        message: 'DB Error (reset intro)',
+        error: error.message,
+      });
     });
   });
 });
