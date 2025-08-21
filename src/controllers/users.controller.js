@@ -94,6 +94,7 @@ const getUserStatus = async (req, res) => {
     const [result] = await db.execute(
       `
       SELECT
+        u.id,
         u.is_active,
         u.intro_sent_today,
         t.id as trip_id,
@@ -117,6 +118,7 @@ const getUserStatus = async (req, res) => {
 
     const status = result[0];
     res.status(200).json({
+      userId: status.id,
       isActive: Boolean(status.is_active),
       introSentToday: Boolean(status.intro_sent_today),
       currentTrip: status.trip_id
