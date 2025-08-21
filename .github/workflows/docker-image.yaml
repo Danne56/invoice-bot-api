@@ -35,8 +35,6 @@ jobs:
           tags: |
             ghcr.io/danne56/invoice-bot-api:${{ github.sha }}
             ghcr.io/danne56/invoice-bot-api:test
-          # Pull from cache
           cache-from: type=gha
-          # Push to cache
           cache-to: type=gha,mode=max
           pull: true
