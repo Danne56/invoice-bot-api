@@ -95,6 +95,7 @@ const getUserStatus = async (req, res) => {
       `
       SELECT
         u.is_active,
+        u.intro_sent_today,
         t.id as trip_id,
         t.event_name,
         t.started_at,
@@ -117,6 +118,7 @@ const getUserStatus = async (req, res) => {
     const status = result[0];
     res.status(200).json({
       isActive: Boolean(status.is_active),
+      introSentToday: Boolean(status.intro_sent_today),
       currentTrip: status.trip_id
         ? (() => {
             const currency = status.currency || 'IDR';
