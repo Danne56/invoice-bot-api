@@ -39,3 +39,4 @@ jobs:
           cache-from: type=gha
           # Push to cache
           cache-to: type=gha,mode=max
+          pull: true
