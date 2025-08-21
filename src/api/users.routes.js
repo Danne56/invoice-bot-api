@@ -4,6 +4,8 @@ const {
   createUser,
   getUserByPhoneNumber,
   getUserStatus,
+  markIntroSent,
+  resetIntroFlags,
 } = require('../controllers/users.controller');
 const { validate } = require('../middleware/validator');
 
@@ -54,5 +56,27 @@ router.get(
   validate,
   getUserStatus
 );
+
+/**
+ * PUT /api/users/:userId/intro-sent
+ * Mark that daily intro has been sent to user
+ */
+router.put(
+  '/:userId/intro-sent',
+  [
+    param('userId')
+      .isString()
+      .isLength({ min: 12, max: 12 })
+      .withMessage('Invalid user ID'),
+  ],
+  validate,
+  markIntroSent
+);
+
+/**
+ * POST /api/users/reset-intro
+ * Reset intro flags for all users (typically called daily via cron)
+ */
+router.post('/reset-intro', resetIntroFlags);
 
 module.exports = router;

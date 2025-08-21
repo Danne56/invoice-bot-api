@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS users (
     phone_number VARCHAR(20) UNIQUE NOT NULL,
     is_active TINYINT(1) NOT NULL DEFAULT 0,
     current_trip_id VARCHAR(12) NULL,  -- If trip also uses custom ID
+    intro_sent_today TINYINT(1) NOT NULL DEFAULT 0,  -- Track if daily intro has been sent
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_phone_number (phone_number),

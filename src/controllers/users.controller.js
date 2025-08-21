@@ -144,8 +144,77 @@ const getUserStatus = async (req, res) => {
   }
 };
 
+const markIntroSent = async (req, res) => {
+  const { userId } = req.params;
+  const db = await pool.getConnection();
+
+  try {
+    // Verify user exists
+    const [user] = await db.execute('SELECT id FROM users WHERE id = ?', [
+      userId,
+    ]);
+    if (user.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Update intro_sent_today flag
+    const [result] = await db.execute(
+      'UPDATE users SET intro_sent_today = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      [userId]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    logger.info({
+      message: `Intro marked as sent for user ${userId}`,
+    });
+
+    res.status(200).json({ success: true });
+  } catch (err) {
+    logger.error({
+      message: 'DB Error (mark intro sent)',
+      error: err.message,
+    });
+    res.status(500).json({ error: 'Failed to update intro status' });
+  } finally {
+    db.release();
+  }
+};
+
+const resetIntroFlags = async (req, res) => {
+  const db = await pool.getConnection();
+
+  try {
+    const [result] = await db.execute(
+      'UPDATE users SET intro_sent_today = 0, updated_at = CURRENT_TIMESTAMP WHERE intro_sent_today = 1'
+    );
+
+    logger.info({
+      message: 'Intro flags reset successfully',
+      affectedRows: result.affectedRows,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Reset intro flags for ${result.affectedRows} users`,
+    });
+  } catch (err) {
+    logger.error({
+      message: 'DB Error (reset intro)',
+      error: err.message,
+    });
+    res.status(500).json({ error: 'Failed to reset intro flags' });
+  } finally {
+    db.release();
+  }
+};
+
 module.exports = {
   createUser,
   getUserByPhoneNumber,
   getUserStatus,
+  markIntroSent,
+  resetIntroFlags,
 };
