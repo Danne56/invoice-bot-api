@@ -34,7 +34,7 @@ jobs:
           push: true
           tags: |
             ghcr.io/danne56/invoice-bot-api:${{ github.sha }}
-            ghcr.io/danne56/invoice-bot-api:latest
+            ghcr.io/danne56/invoice-bot-api:test
           # Pull from cache
           cache-from: type=gha
           # Push to cache
