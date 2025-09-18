@@ -1,8 +1,11 @@
 const js = require('@eslint/js');
 const globals = require('globals');
+const prettier = require('eslint-plugin-prettier');
+const prettierConfig = require('eslint-config-prettier');
 
 module.exports = [
   js.configs.recommended,
+  prettierConfig,
   {
     ignores: [
       'node_modules/**',
@@ -17,6 +20,9 @@ module.exports = [
   },
   {
     files: ['**/*.js'],
+    plugins: {
+      prettier,
+    },
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'commonjs',
@@ -32,6 +38,7 @@ module.exports = [
       'no-var': 'error',
       'object-shorthand': 'error',
       'prefer-arrow-callback': 'error',
+      'prettier/prettier': 'error',
     },
   },
   {
